@@ -1,0 +1,153 @@
+/* Network Discovery Styles */
+
+.network-btn {
+  width: 50px;
+  height: 50px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid var(--glass-border);
+  border-radius: 12px;
+  color: var(--text-primary);
+  font-size: 1.5rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.network-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--primary);
+  transform: scale(1.05);
+}
+
+.network-modal {
+  max-width: 700px;
+}
+
+.network-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.network-item {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 2px solid var(--glass-border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.network-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--primary);
+  transform: translateX(5px);
+}
+
+.network-item.primary {
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.network-item.primary:hover {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: var(--success);
+}
+
+.network-icon {
+  font-size: 2rem;
+  min-width: 50px;
+  text-align: center;
+}
+
+.network-info {
+  flex: 1;
+}
+
+.network-name {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Courier New', monospace;
+}
+
+.primary-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  background: var(--success);
+  color: white;
+  font-size: 0.7rem;
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.network-details {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 3px;
+}
+
+.network-meta {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.network-arrow {
+  font-size: 1.5rem;
+  color: var(--primary);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.network-item:hover .network-arrow {
+  opacity: 1;
+}
+
+.network-help {
+  padding: 15px;
+  background: rgba(99, 102, 241, 0.1);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.network-help strong {
+  color: var(--text-primary);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .network-modal {
+    max-width: 95%;
+  }
+  
+  .network-item {
+    padding: 15px;
+    gap: 15px;
+  }
+  
+  .network-icon {
+    font-size: 1.5rem;
+    min-width: 40px;
+  }
+  
+  .network-name {
+    font-size: 1rem;
+  }
+}
