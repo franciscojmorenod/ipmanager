@@ -1,1326 +1,957 @@
-# IP Manager - Complete System Design Document
+# IP Manager - Complete Design & Deployment Documentation
+
 **Version:** 2.0  
-**Date:** December 08, 2025  
-**Author:** Francisco - Son2 Latin Music  
-**Location:** Tampa Bay, Florida  
+**Last Updated:** December 2024  
+**System Location:** Ubuntu Server 192.168.0.199:/home/ubuntu/ipmanager
 
 ---
 
 ## Executive Summary
 
-IP Manager is a comprehensive network monitoring and IP address management system built for visualizing and tracking devices across network subnets. The system provides real-time network scanning, historical device tracking, IP reservation capabilities, and visual network management through a modern web interface.
+IP Manager is a comprehensive network management platform that provides IP address tracking, network scanning, device history, VM provisioning via Proxmox, and integrated performance monitoring. The entire system runs as a containerized application stack on Ubuntu Server using Docker Compose.
 
 ### Key Capabilities
-- Real-time network scanning with nmap
-- 16x16 grid visualization (256 IP addresses)
-- Persistent device history tracking with MySQL
-- IP address reservation system
-- Custom notes/comments per IP
-- Multi-network discovery and switching
-- Visual status indicators with color coding
-- phpMyAdmin database management interface
+- **Network Discovery**: Automated scanning and detection of active devices
+- **IP Address Management**: Reserve, track, and manage IP allocations
+- **Device History**: Complete historical tracking of device connections and changes
+- **VM Provisioning**: Direct Proxmox integration for VM creation and deployment
+- **Performance Monitoring**: Integrated Prometheus, Grafana, and Alertmanager stack
+- **Traffic Testing**: Automated network performance testing with iperf3
+- **Modern UI**: Glassmorphism design with responsive interface
 
 ---
 
-## System Architecture
+## Architecture Overview
 
-### Deployment Platform
-- **Host System:** Ubuntu Server 24.04.3 LTS
-- **Network Mode:** Host network (direct access to 192.168.1.x)
-- **Deployment Method:** Docker Compose (4 containers)
-- **Access Method:** Web browser from any device on network
+### System Topology
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Ubuntu Server (192.168.0.199)                │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              Docker Compose Stack (7 Containers)         │  │
+│  │                                                          │  │
+│  │  ┌────────────────┐  ┌────────────────┐                │  │
+│  │  │  IP Manager    │  │   Monitoring   │                │  │
+│  │  │  Application   │  │     Stack      │                │  │
+│  │  │                │  │                │                │  │
+│  │  │  1. MySQL      │  │  5. Prometheus │                │  │
+│  │  │  2. Backend    │  │  6. Grafana    │                │  │
+│  │  │  3. Frontend   │  │  7. Alertmgr   │                │  │
+│  │  │  4. phpMyAdmin │  │                │                │  │
+│  │  └────────────────┘  └────────────────┘                │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                 │
+│  Network Mode: host (backend for scanning)                     │
+│  Restart Policy: unless-stopped (auto-recovery)                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ Proxmox API
+                              ▼
+                    ┌──────────────────┐
+                    │ Proxmox Server   │
+                    │ (192.168.0.100)  │
+                    │                  │
+                    │ - VM Creation    │
+                    │ - No Containers  │
+                    └──────────────────┘
+```
 
 ### Container Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Docker Host                           │
-│              Ubuntu Server 24.04.3                       │
-│                  (Host Network)                          │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │   MySQL      │  │   Backend    │  │  Frontend    │ │
-│  │   Container  │  │   Container  │  │  Container   │ │
-│  │              │  │              │  │              │ │
-│  │   Port 3306  │  │   Port 8000  │  │  Port 3000   │ │
-│  │              │  │              │  │              │ │
-│  │  Database    │  │  FastAPI     │  │   React      │ │
-│  │  Storage     │◄─┤  + nmap      │◄─┤  TypeScript  │ │
-│  └──────────────┘  │  + Python    │  └──────────────┘ │
-│                     └──────────────┘                    │
-│  ┌──────────────┐                                       │
-│  │ phpMyAdmin   │                                       │
-│  │  Container   │                                       │
-│  │              │                                       │
-│  │  Port 8080   │                                       │
-│  │              │                                       │
-│  │  Web UI      │                                       │
-│  └──────────────┘                                       │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
-                         │
-                         ├── Network: 192.168.1.x
-                         │
-                ┌────────┴────────┐
-                │                 │
-          Gateway (.1)      Devices (.2-.255)
-```
+All containers run on **Ubuntu Server 192.168.0.199** via a single `docker-compose.yml` file:
+
+| Container | Image | Port(s) | Purpose | Network Mode |
+|-----------|-------|---------|---------|--------------|
+| ipam-mysql | mysql:8.0 | 3306 | Database storage | bridge |
+| ipam-backend | ipmanager-backend | 8000 | FastAPI REST API | **host** |
+| ipam-frontend | ipmanager-frontend | 3000 | React UI | bridge |
+| phpmyadmin | phpmyadmin:latest | 8080 | Database admin | bridge |
+| prometheus | prom/prometheus:latest | 9090 | Metrics collection | bridge |
+| grafana | grafana/grafana:latest | 3001 | Dashboards | bridge |
+| alertmanager | prom/alertmanager:latest | 9093 | Alert handling | bridge |
+
+**Key Design Decisions:**
+- **Backend uses `network_mode: host`**: Required for direct network interface access for ICMP scanning and raw socket operations
+- **All containers have `restart: unless-stopped`**: Automatic recovery after system reboots or updates
+- **Persistent volumes**: All data survives container restarts
 
 ---
 
-## Component Specifications
+## Component Details
 
-### 1. MySQL Database Container
+### 1. MySQL Database (ipam-mysql)
 
-**Image:** `mysql:8.0`  
-**Container Name:** `ipam-mysql`  
-**Port:** `3306`  
-**Volume:** `mysql-data` (persistent)
+**Purpose**: Persistent storage for all application data
 
-**Environment Variables:**
-```yaml
-MYSQL_ROOT_PASSWORD: ipmanager_root_2024
-MYSQL_DATABASE: ipmanager
-MYSQL_USER: ipmanager
-MYSQL_PASSWORD: ipmanager_pass_2024
+**Schema:**
+```sql
+- ip_addresses: Main IP tracking table
+  - id, ip_address, hostname, mac_address, status, 
+    reserved_by, notes, first_seen, last_seen, created_at, updated_at
+
+- device_history: Historical tracking of all devices
+  - id, ip_address, hostname, mac_address, status, vendor,
+    first_seen, last_seen, active
+
+- vm_traffic_tests: Performance test results
+  - id, source_vm, target_vm, test_type, duration, bandwidth,
+    result_data, status, created_at
 ```
 
-**Database Schema:**
+**Configuration:**
+- Root password: ipmanager_root_2024
+- Application user: ipmanager / ipmanager_pass_2024
+- Port: 3306 (exposed to host for direct access)
+- Health check: mysqladmin ping every 10s
+- Volume: mysql-data (persistent)
 
-**Table: nodes**
-- Primary node tracking table
-- Stores IP address information and status
-- Fields:
-  - `id` (INT, PRIMARY KEY, AUTO_INCREMENT)
-  - `ip_address` (VARCHAR(15), UNIQUE)
-  - `subnet` (VARCHAR(15))
-  - `last_octet` (INT)
-  - `status` (ENUM: 'up', 'down', 'previously_used', 'reserved')
-  - `hostname` (VARCHAR(255))
-  - `mac_address` (VARCHAR(17))
-  - `vendor` (VARCHAR(255))
-  - `first_seen` (TIMESTAMP)
-  - `last_seen` (TIMESTAMP)
-  - `last_scanned` (TIMESTAMP)
-  - `times_seen` (INT)
-  - `notes` (TEXT) - User custom comments
-  - `is_reserved` (BOOLEAN)
-  - `reserved_by` (VARCHAR(100))
-  - `reserved_at` (TIMESTAMP)
+### 2. FastAPI Backend (ipam-backend)
 
-**Table: scan_history**
-- Records of all network scans performed
-- Fields:
-  - `id` (INT, PRIMARY KEY)
-  - `subnet` (VARCHAR(15))
-  - `start_ip` (INT)
-  - `end_ip` (INT)
-  - `total_ips` (INT)
-  - `active_ips` (INT)
-  - `scan_duration` (FLOAT)
-  - `scanned_at` (TIMESTAMP)
+**Purpose**: REST API for all application logic
 
-**Table: ip_reservations**
-- Detailed reservation tracking
-- Fields:
-  - `id` (INT, PRIMARY KEY)
-  - `ip_address` (VARCHAR(15))
-  - `reserved_for` (VARCHAR(255))
-  - `description` (TEXT)
-  - `reserved_by` (VARCHAR(100))
-  - `reserved_at` (TIMESTAMP)
-  - `expires_at` (TIMESTAMP, NULL)
-  - `is_active` (BOOLEAN)
-
-**Table: node_history**
-- Historical snapshots of node state changes
-- Fields:
-  - `id` (INT, PRIMARY KEY)
-  - `node_id` (INT, FOREIGN KEY → nodes.id)
-  - `ip_address` (VARCHAR(15))
-  - `status` (ENUM: 'up', 'down')
-  - `hostname` (VARCHAR(255))
-  - `mac_address` (VARCHAR(17))
-  - `vendor` (VARCHAR(255))
-  - `recorded_at` (TIMESTAMP)
-
-### 2. Backend Container
-
-**Base Image:** `ubuntu:24.04`  
-**Container Name:** `ipam-backend`  
-**Port:** `8000`  
-**Network Mode:** `host` (critical for nmap access)  
-**Privileged:** `true` (required for nmap)
+**Key Features:**
+- Network scanning (ICMP ping sweep)
+- IP address management (CRUD operations)
+- Device history tracking
+- Proxmox VM creation integration
+- SSH-based traffic testing with iperf3
+- Prometheus metrics export
 
 **Technology Stack:**
-- Python 3.12
-- FastAPI (web framework)
-- Uvicorn (ASGI server)
-- nmap (network scanning)
-- python-nmap (nmap Python wrapper)
-- mysql-connector-python (database driver)
+- FastAPI (async Python web framework)
+- aiomysql (async MySQL driver)
+- paramiko (SSH client for remote commands)
+- scapy (network scanning)
+- proxmoxer (Proxmox API client)
 
-**Python Dependencies:**
-```
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-nmap==0.7.1
-pydantic==2.5.0
-mysql-connector-python==8.2.0
-```
+**Network Configuration:**
+- Uses `network_mode: host` for direct network access
+- Can ping any device on 192.168.0.x network
+- Can SSH to VMs for traffic testing
+- Accesses MySQL on 127.0.0.1:3306
 
-**System Dependencies:**
-- nmap (network scanning tool)
-- curl (for healthchecks)
+**Environment Variables:**
+```bash
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_USER=ipmanager
+MYSQL_PASSWORD=ipmanager_pass_2024
+MYSQL_DATABASE=ipmanager
+PROXMOX_HOST=192.168.0.100
+PROXMOX_USER=root@pam
+PROXMOX_PASSWORD=${PROXMOX_PASSWORD}
+PROXMOX_NODE=pve
+```
 
 **API Endpoints:**
+- `GET /api/scan/{network}` - Scan network for active devices
+- `GET /api/ips` - List all IP addresses
+- `POST /api/ips` - Create/reserve IP
+- `PUT /api/ips/{ip}` - Update IP info
+- `DELETE /api/ips/{ip}` - Delete IP
+- `GET /api/history` - Get device history
+- `POST /api/create-vm` - Create Proxmox VM
+- `POST /api/traffic-test` - Run iperf3 test
+- `GET /docs` - Interactive API documentation
 
-**Core Endpoints:**
-- `GET /` - API information
-- `GET /health` - Health check with DB status
-- `POST /api/scan` - Perform network scan
-  - Request: `{subnet, start_ip, end_ip}`
-  - Response: Full scan results with node details
+### 3. React Frontend (ipam-frontend)
 
-**Node Management:**
-- `GET /api/node/{ip}` - Get detailed node info with history
-- `PUT /api/node/update` - Update node notes
-  - Request: `{ip, notes, is_reserved}`
+**Purpose**: User interface for IP Manager
 
-**IP Reservation:**
-- `POST /api/reserve` - Reserve an IP address
-  - Request: `{ip, reserved_for, description, reserved_by}`
-- `POST /api/release/{ip}` - Release reserved IP
+**Design System:**
+- **Glassmorphism UI**: Modern translucent design with backdrop blur
+- **Responsive Layout**: Works on desktop, tablet, and mobile
+- **Real-time Updates**: Automatic refresh of network data
+- **Dark Theme**: Low-eye-strain color scheme
 
-**Network Discovery:**
-- `GET /api/networks/discover` - Discover available network interfaces
-  - Returns: List of all reachable subnets
+**Key Components:**
+```
+App.js
+├── NetworkScanner - Scan network and display results
+├── IPList - Show all tracked IPs with filtering
+├── DeviceHistory - Historical device tracking
+├── VMCreator - Proxmox VM provisioning form
+├── TrafficTester - Network performance testing
+└── MonitoringLinks - Quick access to Grafana/Prometheus
+```
 
-**Connection Pooling:**
+**Features:**
+- One-click network scanning
+- Visual status indicators (active/inactive/reserved)
+- Click-to-copy IP addresses
+- Device details modal
+- Inline IP reservation
+- VM creation wizard
+- Traffic test launcher
+- Direct links to monitoring dashboards
+
+**Technology:**
+- React 18
+- Axios (HTTP client)
+- CSS3 (glassmorphism effects)
+- Responsive flexbox layout
+
+### 4. phpMyAdmin (phpmyadmin)
+
+**Purpose**: Database administration interface
+
+**Access:** http://192.168.0.199:8080  
+**Credentials:** root / ipmanager_root_2024
+
+**Use Cases:**
+- Direct database queries
+- Schema modifications
+- Data export/import
+- Performance monitoring
+- Index optimization
+
+### 5. Prometheus (prometheus)
+
+**Purpose**: Time-series metrics collection
+
+**Scrape Targets:**
+- Prometheus itself (self-monitoring)
+- Node exporters on managed VMs
+- iperf3 servers on VMs
+
+**Configuration:**
+```yaml
+scrape_interval: 5s
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+  
+  - job_name: 'node_exporter'
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/nodes.yml']
+  
+  - job_name: 'iperf3'
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/iperf.yml']
+```
+
+**Dynamic Target Discovery:**
+- `monitoring/prometheus/targets/nodes.yml` - VM node exporters
+- `monitoring/prometheus/targets/iperf.yml` - iperf3 servers
+
+**Retention:** 30 days
+
+**Access:** http://192.168.0.199:9090
+
+### 6. Grafana (grafana)
+
+**Purpose**: Visualization and dashboarding
+
+**Features:**
+- Pre-configured Prometheus datasource
+- Dashboard provisioning support
+- Live traffic test visualization
+- VM performance metrics
+- Network bandwidth graphs
+
+**Configuration:**
+- Admin credentials: admin / admin
+- Datasource: Prometheus (http://prometheus:9090)
+- Provisioning: `/etc/grafana/provisioning`
+- Dashboards: `/var/lib/grafana/dashboards`
+
+**Access:** http://192.168.0.199:3001
+
+### 7. Alertmanager (alertmanager)
+
+**Purpose**: Alert routing and notification
+
+**Configuration:**
+```yaml
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'web.hook'
+```
+
+**Access:** http://192.168.0.199:9093
+
+---
+
+## Proxmox Integration
+
+### VM Creation Workflow
+
+1. **User initiates VM creation** from frontend
+2. **Frontend sends request** to backend API
+3. **Backend authenticates** with Proxmox API (192.168.0.100)
+4. **Backend creates VM** with specified configuration
+5. **Backend returns** VM ID and status
+6. **Frontend displays** creation confirmation
+
+### VM Configuration Options
+
 ```python
-db_config = {
-    "host": "localhost",
-    "port": 3306,
-    "user": "ipmanager",
-    "password": "ipmanager_pass_2024",
-    "database": "ipmanager",
-    "pool_name": "ipmanager_pool",
-    "pool_size": 10
+{
+    "vmid": 100-999,          # Unique VM ID
+    "name": "vm-name",        # VM hostname
+    "cores": 2,               # CPU cores
+    "memory": 2048,           # RAM in MB
+    "disk": 32,               # Disk size in GB
+    "network_bridge": "vmbr0" # Network bridge
 }
 ```
 
-**Scanning Process:**
-1. Receive scan request with subnet range
-2. Execute nmap with arguments: `-sn -n -T4`
-3. Parse nmap results for:
-   - IP addresses responding
-   - Hostnames (if available)
-   - MAC addresses
-   - Vendor information (from MAC OUI)
-4. Update database for each IP:
-   - Create new node if first time seen
-   - Update existing node with new scan data
-   - Mark as 'up' if responding
-   - Mark as 'previously_used' if was up but now down
-5. Record scan in scan_history table
-6. Return complete results to frontend
+### Proxmox Requirements
 
-### 3. Frontend Container
+- Proxmox VE 7.0+
+- API access enabled
+- User with VM.Allocate privileges
+- Network bridge configured
+- Storage pool available
 
-**Base Image:** `node:18`  
-**Container Name:** `ipam-frontend`  
-**Port:** `3000`  
-**Network Mode:** `host`
-
-**Technology Stack:**
-- React 18
-- JavaScript/JSX
-- CSS3 with custom animations
-- Fetch API for backend communication
-
-**Key React Components:**
-
-**Main App Component:**
-- State management for:
-  - Network scanning status
-  - Scan results (256 IPs)
-  - Selected IP details
-  - Modal visibility states
-  - Network discovery data
-  - Filter settings
-
-**Grid Rendering:**
-- 16x16 matrix (16 rows × 16 columns = 256 cells)
-- Each cell represents one IP address (0-255)
-- Dynamic styling based on status
-- Click handlers for detailed views
-
-**Modal Components:**
-1. **Details Modal** - Shows full IP information
-2. **Reservation Modal** - Form for reserving IPs
-3. **Notes Modal** - Text area for custom comments
-4. **Network Discovery Modal** - Lists available subnets
-
-**Visual Status System:**
-
-| Status | Color | Icon | Meaning |
-|--------|-------|------|---------|
-| up | Green (🟢) | ● | Device currently online |
-| down | Grey (⚪) | - | Never seen, available |
-| previously_used | Yellow (🟡) | - | Was online, now offline |
-| reserved | Purple (🟣) | 🔒 | Reserved for specific use |
-| localhost | Blue (💙) | 🏠 | Host machine (Ubuntu laptop) |
-
-**Additional Visual Indicators:**
-- 📝 Notes icon - IP has custom comments
-- ● Vendor dot - Device has vendor identification
-- Blue dot - IP has associated notes
-
-**User Interactions:**
-1. Select subnet (manual or from network discovery)
-2. Click "Start Scan" to scan 0-255
-3. View grid with color-coded statuses
-4. Click any cell to see details
-5. Add notes, reserve IPs, view history
-6. Filter by status (All, Active, Available, Previously Used)
-
-### 4. phpMyAdmin Container
-
-**Image:** `phpmyadmin:latest`  
-**Container Name:** `ipam-phpmyadmin`  
-**Port:** `8080`
-
-**Purpose:**
-- Web-based MySQL database management
-- Query execution interface
-- Data export/import capabilities
-- Visual schema browsing
-
-**Access:**
-- URL: `http://<ubuntu-ip>:8080`
-- Username: `ipmanager` or `root`
-- Password: `ipmanager_pass_2024` or `ipmanager_root_2024`
+**Important:** Proxmox server (192.168.0.100) runs **NO Docker containers**. It only provides the hypervisor platform and API for VM management.
 
 ---
 
-## Network Configuration
+## Traffic Testing System
 
-### Host Network Requirements
+### Architecture
 
-**Network Mode:** `host`  
-**Why:** Docker bridge networking on Windows/some Linux systems causes false positives in nmap scans due to NAT gateway behavior. Host network mode gives containers direct access to the physical network.
-
-**Network Access:**
-- Backend can directly scan 192.168.1.0/24 (or any host-reachable subnet)
-- Frontend accessible from any device on network
-- MySQL accessible for external tools if needed
-- phpMyAdmin accessible via web browser
-
-**Port Bindings:**
 ```
-3000 → React Frontend
-8000 → FastAPI Backend
-3306 → MySQL Database
-8080 → phpMyAdmin
+IP Manager (192.168.0.199)
+    │
+    ├─→ SSH to Source VM (192.168.0.32)
+    │   └─→ Launch iperf3 client → Target VM (192.168.0.33)
+    │
+    └─→ Prometheus scrapes iperf3 metrics
+        └─→ Grafana visualizes in real-time
 ```
 
-**Firewall Considerations:**
+### Testing Process
+
+1. **User selects source and target VMs**
+2. **Configures test parameters:**
+   - Protocol: TCP or UDP
+   - Duration: 1-300 seconds
+   - Bandwidth limit: 10M-1G
+3. **Backend executes:**
+   ```bash
+   ssh ubuntu@source-vm "iperf3 -c target-vm -t 60 -b 100M -J"
+   ```
+4. **Results stored** in database
+5. **Metrics exported** to Prometheus
+6. **Live graphs** available in Grafana
+
+### VM Preparation
+
+Each VM being tested must have:
+
 ```bash
-# Allow access to services (if UFW enabled)
-sudo ufw allow 3000/tcp  # Frontend
-sudo ufw allow 8000/tcp  # Backend API
-sudo ufw allow 8080/tcp  # phpMyAdmin
-sudo ufw allow 3306/tcp  # MySQL (optional, for external access)
+# Node exporter for system metrics
+sudo systemctl enable --now node_exporter  # Port 9100
+
+# iperf3 server for traffic tests
+sudo systemctl enable --now iperf3-server  # Port 5201
+
+# SSH password authentication
+PasswordAuthentication yes  # In /etc/ssh/sshd_config
+```
+
+### Test Results
+
+Results include:
+- Throughput (Mbits/sec)
+- Packet loss (%)
+- Jitter (ms)
+- Retransmissions
+- CPU utilization
+- Test duration
+- Timestamp
+
+---
+
+## Directory Structure
+
+```
+/home/ubuntu/ipmanager/
+├── docker-compose.yml              # Main orchestration file
+├── .env                            # Environment variables (Proxmox password)
+│
+├── backend/
+│   ├── Dockerfile                  # Backend container build
+│   ├── main.py                     # FastAPI application
+│   ├── requirements.txt            # Python dependencies
+│   └── /app                        # Mounted in container
+│
+├── frontend/
+│   ├── Dockerfile                  # Frontend container build
+│   ├── package.json                # Node dependencies
+│   ├── src/
+│   │   ├── App.js                  # Main React component
+│   │   └── App.css                 # Glassmorphism styles
+│   └── /app                        # Mounted in container
+│
+├── mysql/
+│   └── init.sql                    # Database initialization
+│
+├── monitoring/
+│   ├── prometheus/
+│   │   ├── prometheus.yml          # Prometheus config
+│   │   └── targets/
+│   │       ├── nodes.yml           # VM node exporters
+│   │       └── iperf.yml           # iperf3 targets
+│   │
+│   ├── grafana/
+│   │   ├── provisioning/
+│   │   │   ├── datasources/
+│   │   │   │   └── prometheus.yml  # Auto-configure Prometheus
+│   │   │   └── dashboards/
+│   │   │       └── dashboards.yml  # Dashboard config
+│   │   └── dashboards/             # Custom dashboards
+│   │
+│   └── alertmanager/
+│       └── config.yml              # Alert routing
+│
+└── volumes/ (Docker managed)
+    ├── mysql-data/                 # Database persistence
+    ├── prometheus-data/            # Metrics storage
+    ├── grafana-data/               # Dashboard configs
+    └── alertmanager-data/          # Alert state
 ```
 
 ---
 
-## Features and Functionality
-
-### 1. Real-Time Network Scanning
-
-**Technology:** nmap with Python wrapper
-
-**Scan Parameters:**
-- `-sn` : Ping scan (no port scan)
-- `-n` : No DNS resolution
-- `-T4` : Aggressive timing
-
-**Information Gathered:**
-- IP address status (up/down)
-- Hostname (when available)
-- MAC address
-- Vendor identification (via MAC OUI lookup)
-- Response time
-
-**Scan Performance:**
-- Full /24 subnet (256 IPs): ~15-30 seconds
-- Partial range: Proportional to range size
-- Concurrent scanning via nmap's internal threading
-
-### 2. Visual Grid Interface
-
-**16x16 Matrix Design:**
-- Row 0: IPs .0 - .15
-- Row 1: IPs .16 - .31
-- ...
-- Row 15: IPs .240 - .255
-
-**Cell Design:**
-- Size: 60-65px square
-- Border: 2-3px based on status
-- Corner indicators for special states
-- Hover effect: Scale 1.15x
-- Click: Open details modal
-
-**Responsive Design:**
-- Desktop: Full 65px cells
-- Tablet: 50px cells
-- Mobile: 38px cells
-- Grid adapts to screen size
-
-### 3. Device History Tracking
-
-**First Seen:**
-- Timestamp when device first detected
-- Never changes once set
-- Useful for device lifecycle tracking
-
-**Last Seen:**
-- Updated whenever device responds to scan
-- Shows most recent online time
-- Helps identify intermittent devices
-
-**Times Seen:**
-- Counter incremented on each detection
-- Indicates frequency of device presence
-- Useful for identifying mobile devices vs fixed infrastructure
-
-**Status Transitions:**
-1. Never scanned → 'down' (grey)
-2. First detection → 'up' (green)
-3. Goes offline → 'previously_used' (yellow)
-4. Returns online → 'up' (green)
-5. Reserved → 'reserved' (purple) regardless of online status
-
-### 4. IP Reservation System
-
-**Purpose:**
-- Mark IPs for specific devices/purposes
-- Prevent accidental assignment
-- Document IP allocation plans
-
-**Reservation Process:**
-1. User clicks IP cell
-2. Clicks "Reserve IP" button
-3. Fills form:
-   - Reserved For (required): Device name/purpose
-   - Description (optional): Additional details
-   - Reserved By (optional): Person/team name
-4. Submits reservation
-5. IP status changes to 'reserved' (purple)
-6. 🔒 lock icon appears on cell
-
-**Reservation Data:**
-- Stored in both `nodes` table and `ip_reservations` table
-- Timestamp recorded
-- Can be released at any time
-- Survives system restarts
-
-**Release Process:**
-1. Click reserved IP
-2. Click "Release IP" button
-3. Confirm action
-4. Status returns to 'down' or 'previously_used'
-
-### 5. Custom Comments/Notes
-
-**Purpose:**
-- Document device information
-- Add maintenance notes
-- Record configuration details
-- Store contact information
-
-**Features:**
-- Unlimited text length (TEXT field)
-- Preserves line breaks and formatting
-- Visible indicator (📝) on cells with notes
-- Searchable via phpMyAdmin
-- Persistent across scans
-
-**Common Use Cases:**
-```
-192.168.1.10 - Web Server
-Owner: IT Department
-Contact: admin@company.com
-SSH Port: 2222
-Last Maintenance: 2024-12-01
-```
-
-### 6. Multi-Network Discovery
-
-**Auto-Detection:**
-- Scans all network interfaces on host
-- Identifies IP addresses and subnets
-- Detects gateway information
-- Marks primary network
-
-**Network Information:**
-- Interface name (eth0, wlan0, etc.)
-- Host IP address
-- Subnet (first 3 octets)
-- Network type (Local vs Virtual)
-- Gateway IP (for primary network)
-- Total addressable IPs
-
-**User Interface:**
-- 🌐 Globe button next to subnet input
-- Modal showing all available networks
-- One-click network switching
-- Primary network highlighted in green
-
-### 7. Localhost Highlighting
-
-**Purpose:**
-- Visually identify the host machine running the containers
-- Quick identification of gateway
-- Navigation aid in large networks
-
-**Visual Design:**
-- Blue glowing border
-- 🏠 House icon in corner
-- Pulsing glow animation (3-second cycle)
-- Brighter blue on hover
-- Bold number styling
-
-**Detection Methods:**
-1. Gateway detection (usually .1)
-2. Match against network discovery results
-3. Manual specification (if needed)
-
-### 8. Statistical Dashboard
-
-**Real-Time Metrics:**
-- Total IPs scanned
-- Active devices (currently online)
-- Available IPs (never used)
-- Previously used (offline devices)
-- Reserved IPs
-- IPs with custom notes
-
-**Visual Presentation:**
-- Card-based layout
-- Icon for each category
-- Large numbers for quick scanning
-- Hover effects for interactivity
-
-### 9. Filtering System
-
-**Filter Options:**
-- All (default view)
-- Active Only (show green cells)
-- Available Only (show grey cells)
-- Previously Used (show yellow cells)
-
-**Behavior:**
-- Non-matching cells fade to 20% opacity
-- Matching cells remain fully visible
-- Stats update to show filtered counts
-- Can be combined with search/sort in future versions
-
----
-
-## Data Flow
-
-### Scan Workflow
-
-```
-User clicks "Start Scan"
-        ↓
-Frontend sends POST /api/scan
-        ↓
-Backend receives request
-        ↓
-Execute nmap scan on subnet
-        ↓
-Parse nmap results
-        ↓
-For each IP (0-255):
-  ├─→ Check if node exists in database
-  │   ├─→ Yes: Update existing record
-  │   │   ├─→ If responding: status = 'up', increment times_seen
-  │   │   └─→ If not responding: status = 'previously_used'
-  │   └─→ No: Create new node record
-  │       └─→ Set appropriate initial status
-  ├─→ Record in node_history (if status changed to 'up')
-  └─→ Preserve reservation status (don't overwrite)
-        ↓
-Save scan record to scan_history
-        ↓
-Return complete results to frontend
-        ↓
-Frontend updates grid display
-        ↓
-User sees color-coded results
-```
-
-### Node Detail View Workflow
-
-```
-User clicks IP cell
-        ↓
-Frontend sends GET /api/node/{ip}
-        ↓
-Backend queries nodes table
-        ↓
-Backend queries node_history table
-        ↓
-Return combined data
-        ↓
-Frontend displays modal with:
-  ├─→ Current status
-  ├─→ Device information
-  ├─→ Timestamps
-  ├─→ Custom notes
-  └─→ Action buttons
-```
-
-### Reservation Workflow
-
-```
-User clicks "Reserve IP"
-        ↓
-Frontend shows reservation form
-        ↓
-User fills in details
-        ↓
-Frontend sends POST /api/reserve
-        ↓
-Backend updates nodes table
-  ├─→ Set status = 'reserved'
-  ├─→ Set is_reserved = TRUE
-  ├─→ Store reservation details
-  └─→ Timestamp the reservation
-        ↓
-Backend creates ip_reservations record
-        ↓
-Return success
-        ↓
-Frontend refreshes scan
-        ↓
-Cell displays purple with lock icon
-```
-
----
-
-## User Interface Design
-
-### Color Scheme
-
-**Primary Colors:**
-- Primary Blue: `#6366f1` (Indigo)
-- Secondary Purple: `#a855f7` (Purple)
-- Success Green: `#10b981` (Emerald)
-- Warning Yellow: `#f59e0b` (Amber)
-- Danger Red: `#ef4444` (Red)
-
-**Background:**
-- Dark: `#0f172a` (Slate)
-- Darker: `#020617` (Slate)
-
-**Text:**
-- Primary: `#f8fafc` (Off-white)
-- Secondary: `#94a3b8` (Slate gray)
-
-**Glassmorphism Effects:**
-- Background: `rgba(255, 255, 255, 0.05)`
-- Border: `rgba(255, 255, 255, 0.1)`
-- Backdrop blur: 20px
-
-### Typography
-
-**Font Family:** 'Inter', sans-serif  
-**Monospace:** 'Courier New', monospace (for IPs, MACs)
-
-**Font Weights:**
-- Regular: 400
-- Medium: 500
-- Semibold: 600
-- Bold: 700
-
-### Animations
-
-**Background Glow:**
-- 3 floating gradient orbs
-- 20-second infinite float animation
-- Blur: 100px
-- Opacity: 0.3
-
-**Cell Hover:**
-- Scale: 1.15x
-- Transition: 0.3s cubic-bezier
-- Z-index: 10 (above other cells)
-
-**Cell Pulse (Active):**
-- Box-shadow pulse every 2 seconds
-- Color: Green rgba with fade
-
-**Localhost Glow:**
-- Blue glow intensity oscillates
-- 3-second cycle
-- Box-shadow from 15px to 25px
-
-**Modal Entry:**
-- Fade in overlay: 0.3s
-- Slide up content: 0.4s
-- Spring easing
-
-**Button Interactions:**
-- Hover: translateY(-2px)
-- Shadow increase
-- 0.3s transition
-
-### Layout Structure
-
-```
-┌─────────────────────────────────────────┐
-│            Header (Logo + Title)        │
-├─────────────────────────────────────────┤
-│       Control Panel (Glass Card)        │
-│  [Subnet Input] [🌐] [Scan Button]     │
-├─────────────────────────────────────────┤
-│      Stats Dashboard (5 Cards)          │
-│  [Active] [Available] [Previous] ...    │
-├─────────────────────────────────────────┤
-│         Legend Bar (Glass)              │
-│  🟢 Active  ⚪ Available  🟡 Previous  │
-├─────────────────────────────────────────┤
-│        Filter Bar (Glass)               │
-│  [All] [Active] [Available] [Previous]  │
-├─────────────────────────────────────────┤
-│         Grid Panel (Glass)              │
-│                                         │
-│  ┌─────────────────────────────┐       │
-│  │  16x16 IP Grid (256 cells)  │       │
-│  │                              │       │
-│  │  [0]  [1]  [2]  ... [15]   │       │
-│  │  [16] [17] [18] ... [31]   │       │
-│  │  ...                        │       │
-│  │  [240][241][242]...[255]   │       │
-│  └─────────────────────────────┘       │
-│                                         │
-└─────────────────────────────────────────┘
-```
-
----
-
-## Installation and Deployment
+## Deployment Guide
 
 ### Prerequisites
 
-**Hardware:**
-- Ubuntu Server 24.04.3 LTS
-- 4GB RAM minimum (8GB recommended)
-- 2 CPU cores minimum
-- 20GB disk space
-- Network interface with access to target subnet
-
-**Software:**
-- Docker Engine
-- Docker Compose
-- Network connectivity to scan target
+- Ubuntu Server 20.04+ at 192.168.0.199
+- Docker and Docker Compose installed
+- Network access to 192.168.0.x subnet
+- Proxmox server accessible at 192.168.0.100
 
 ### Installation Steps
 
-**1. Install Docker:**
+#### 1. Prepare System
+
 ```bash
-sudo apt update
-sudo apt install -y docker.io docker-compose
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
 sudo usermod -aG docker $USER
-sudo systemctl enable docker
-sudo systemctl start docker
+
+# Install Docker Compose
+sudo apt install docker-compose-plugin -y
+
+# Verify installation
+docker --version
+docker compose version
 ```
 
-**2. Extract IP Manager:**
+#### 2. Clone/Setup Project
+
 ```bash
-cd ~
-tar -xzf ipmanager-ubuntu.tar.gz
+# Navigate to home directory
+cd /home/ubuntu
+
+# Create project directory (if not exists)
+mkdir -p ipmanager
 cd ipmanager
+
+# Copy all project files to this location
+# (backend/, frontend/, mysql/, monitoring/, docker-compose.yml)
 ```
 
-**3. Configure MySQL (Optional - Change Passwords):**
+#### 3. Configure Environment
+
 ```bash
-nano docker-compose.yml
-# Edit MYSQL_ROOT_PASSWORD and MYSQL_PASSWORD
+# Create .env file for sensitive credentials
+cat > .env << 'EOF'
+PROXMOX_PASSWORD=your_proxmox_password_here
+EOF
+
+# Secure the file
+chmod 600 .env
 ```
 
-**4. Start Services:**
-```bash
-# Start MySQL first (needs time to initialize)
-docker compose up -d mysql
-sleep 30
+#### 4. Create Monitoring Structure
 
-# Start all services
+```bash
+# Create all monitoring directories
+mkdir -p monitoring/{prometheus/targets,grafana/{provisioning/{datasources,dashboards},dashboards},alertmanager}
+
+# Create Prometheus config
+cat > monitoring/prometheus/prometheus.yml << 'YAML'
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'node_exporter'
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/nodes.yml']
+
+  - job_name: 'iperf3'
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/iperf.yml']
+YAML
+
+# Create initial target files
+echo '[]' > monitoring/prometheus/targets/nodes.yml
+echo '[]' > monitoring/prometheus/targets/iperf.yml
+
+# Create Grafana datasource
+cat > monitoring/grafana/provisioning/datasources/prometheus.yml << 'YAML'
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+YAML
+
+# Create dashboard provisioning
+cat > monitoring/grafana/provisioning/dashboards/dashboards.yml << 'YAML'
+apiVersion: 1
+providers:
+  - name: 'Default'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+YAML
+
+# Create Alertmanager config
+cat > monitoring/alertmanager/config.yml << 'YAML'
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'web.hook'
+
+receivers:
+  - name: 'web.hook'
+    webhook_configs:
+      - url: 'http://127.0.0.1:5001/'
+YAML
+```
+
+#### 5. Deploy Stack
+
+```bash
+# Build and start all containers
 docker compose up -d
 
-# Verify all running
+# Watch startup logs
+docker compose logs -f
+
+# Verify all containers are running
+docker ps
+```
+
+Expected output:
+```
+CONTAINER ID   IMAGE                      PORTS                    NAMES
+xxxxxxxxx      ipmanager-frontend         0.0.0.0:3000->3000/tcp   ipam-frontend
+xxxxxxxxx      ipmanager-backend          (host mode)              ipam-backend
+xxxxxxxxx      mysql:8.0                  0.0.0.0:3306->3306/tcp   ipam-mysql
+xxxxxxxxx      phpmyadmin:latest          0.0.0.0:8080->80/tcp     phpmyadmin
+xxxxxxxxx      prom/prometheus:latest     0.0.0.0:9090->9090/tcp   prometheus
+xxxxxxxxx      grafana/grafana:latest     0.0.0.0:3001->3000/tcp   grafana
+xxxxxxxxx      prom/alertmanager:latest   0.0.0.0:9093->9093/tcp   alertmanager
+```
+
+#### 6. Verify Services
+
+```bash
+# Test each service endpoint
+curl http://localhost:3000                    # Frontend
+curl http://localhost:8000/docs               # Backend API docs
+curl http://localhost:8080                    # phpMyAdmin
+curl http://localhost:9090                    # Prometheus
+curl http://localhost:3001                    # Grafana
+curl http://localhost:9093                    # Alertmanager
+
+# Test database connection
+docker exec -it ipam-mysql mysql -uipmanager -pipmanager_pass_2024 -e "SHOW DATABASES;"
+```
+
+#### 7. Configure Firewall (Optional)
+
+```bash
+# Allow access from local network only
+sudo ufw allow from 192.168.0.0/24 to any port 3000
+sudo ufw allow from 192.168.0.0/24 to any port 8000
+sudo ufw allow from 192.168.0.0/24 to any port 8080
+sudo ufw allow from 192.168.0.0/24 to any port 9090
+sudo ufw allow from 192.168.0.0/24 to any port 3001
+sudo ufw allow from 192.168.0.0/24 to any port 9093
+```
+
+---
+
+## Access Information
+
+### Web Interfaces
+
+All services accessible from any device on 192.168.0.x network:
+
+| Service | URL | Credentials | Purpose |
+|---------|-----|-------------|---------|
+| IP Manager | http://192.168.0.199:3000 | None | Main application |
+| API Docs | http://192.168.0.199:8000/docs | None | Interactive API |
+| phpMyAdmin | http://192.168.0.199:8080 | root / ipmanager_root_2024 | Database admin |
+| Prometheus | http://192.168.0.199:9090 | None | Metrics query |
+| Grafana | http://192.168.0.199:3001 | admin / admin | Dashboards |
+| Alertmanager | http://192.168.0.199:9093 | None | Alert management |
+
+### Container Access
+
+```bash
+# SSH to Ubuntu server
+ssh ubuntu@192.168.0.199
+
+# Access container shell
+docker exec -it ipam-backend bash
+docker exec -it ipam-frontend bash
+docker exec -it ipam-mysql bash
+
+# View container logs
+docker logs ipam-backend -f
+docker logs ipam-frontend -f
+docker logs prometheus -f
+```
+
+---
+
+## Operations Guide
+
+### Starting/Stopping Services
+
+```bash
+# Navigate to project directory
+cd /home/ubuntu/ipmanager
+
+# Stop all containers
+docker compose down
+
+# Start all containers
+docker compose up -d
+
+# Restart specific container
+docker compose restart backend
+docker compose restart frontend
+
+# View status
 docker compose ps
 ```
 
-**5. Access Application:**
+### Viewing Logs
+
 ```bash
-# Get Ubuntu laptop IP
-hostname -I
+# All containers
+docker compose logs -f
 
-# Open in browser from any device
-# Frontend: http://<ubuntu-ip>:3000
-# API Docs: http://<ubuntu-ip>:8000/docs
-# phpMyAdmin: http://<ubuntu-ip>:8080
+# Specific container (last 100 lines)
+docker logs ipam-backend --tail 100 -f
+
+# Search logs
+docker logs ipam-backend 2>&1 | grep "ERROR"
 ```
 
-### Verification
+### Updating Containers
 
-**Check Container Status:**
 ```bash
-docker compose ps
-# Should show 4 containers running
-```
+# Rebuild and restart specific service
+docker compose up -d --build backend
 
-**Check Backend Health:**
-```bash
-curl http://localhost:8000/health
-# Should return: {"status":"healthy","database":"connected"}
-```
-
-**Check MySQL:**
-```bash
-docker exec -it ipam-mysql mysql -u ipmanager -pipmanager_pass_2024 -e "SHOW DATABASES;"
-# Should show 'ipmanager' database
-```
-
-**Test Frontend:**
-- Open browser to `http://<ubuntu-ip>:3000`
-- Should see IP Manager interface
-- Click "Start Scan"
-- Should populate grid with colored cells
-
----
-
-## Usage Guide
-
-### Basic Workflow
-
-**1. First-Time Setup:**
-- Access application in browser
-- Click 🌐 to see available networks
-- Select your primary network
-- Run first scan to populate database
-
-**2. Daily Usage:**
-- Open application
-- Click "Start Scan" to refresh device status
-- Review changes (new devices, offline devices)
-- Update notes as needed
-- Reserve IPs for new equipment
-
-**3. IP Assignment Planning:**
-- Scan network to see what's used
-- Identify available IPs (grey cells)
-- Avoid previously-used IPs (yellow) if possible
-- Reserve IP before deploying device
-- Add notes with device details
-
-**4. Device Troubleshooting:**
-- Search for device by clicking cells
-- Check last seen timestamp
-- Review history of connections
-- Verify MAC address and vendor
-- Check custom notes for configuration
-
-### Common Tasks
-
-**Reserve an IP for New Device:**
-1. Scan network
-2. Find available IP (grey cell)
-3. Click cell → Click "Reserve IP"
-4. Enter device name, description, your name
-5. Submit
-6. IP turns purple with lock icon
-
-**Add Notes to Existing Device:**
-1. Click device's IP cell
-2. Click "📝 Edit Notes"
-3. Type your information
-4. Click "Save Notes"
-5. Cell shows 📝 indicator
-
-**Track Down a Device:**
-1. Note its MAC address or vendor
-2. Scan network
-3. Use phpMyAdmin:
-   ```sql
-   SELECT ip_address, hostname, vendor, last_seen 
-   FROM nodes 
-   WHERE mac_address = 'XX:XX:XX:XX:XX:XX';
-   ```
-4. Or click cells until you find matching vendor
-
-**Generate Network Report:**
-1. Open phpMyAdmin (port 8080)
-2. Go to nodes table
-3. Click "Export"
-4. Select CSV format
-5. Download
-6. Open in Excel for analysis
-
-**View Device History:**
-1. Click IP cell
-2. See first seen, last seen, times seen
-3. For detailed history, use phpMyAdmin:
-   ```sql
-   SELECT * FROM node_history 
-   WHERE ip_address = '192.168.1.100' 
-   ORDER BY recorded_at DESC;
-   ```
-
-### Advanced Usage
-
-**Scan Multiple Networks:**
-1. Click 🌐 button
-2. Select different network
-3. Run scan
-4. Database tracks all networks separately
-5. Switch back and forth as needed
-
-**Export Data for Analysis:**
-```bash
-# Connect to MySQL
-docker exec -it ipam-mysql mysql -u ipmanager -pipmanager_pass_2024 ipmanager
-
-# Export to CSV
-SELECT ip_address, status, vendor, hostname, last_seen, times_seen 
-INTO OUTFILE '/tmp/network_report.csv'
-FIELDS TERMINATED BY ',' 
-ENCLOSED BY '"'
-LINES TERMINATED BY '\n'
-FROM nodes
-WHERE subnet = '192.168.1'
-ORDER BY CAST(SUBSTRING_INDEX(ip_address, '.', -1) AS UNSIGNED);
-```
-
-**Automated Scanning (Cron):**
-```bash
-# Add to crontab for hourly scans
-0 * * * * curl -X POST http://localhost:8000/api/scan \
-  -H "Content-Type: application/json" \
-  -d '{"subnet":"192.168.1","start_ip":0,"end_ip":255}' \
-  >> /var/log/ipmanager-scans.log 2>&1
-```
-
----
-
-## Database Management
-
-### Common Queries
-
-**Find All Active Devices:**
-```sql
-SELECT ip_address, hostname, vendor, mac_address, last_seen
-FROM nodes
-WHERE status = 'up'
-ORDER BY ip_address;
-```
-
-**Find Devices Not Seen Recently:**
-```sql
-SELECT ip_address, hostname, vendor, last_seen,
-       TIMESTAMPDIFF(HOUR, last_seen, NOW()) as hours_offline
-FROM nodes
-WHERE status = 'previously_used'
-  AND last_seen < DATE_SUB(NOW(), INTERVAL 7 DAY)
-ORDER BY last_seen DESC;
-```
-
-**Network Usage Statistics:**
-```sql
-SELECT 
-    status,
-    COUNT(*) as count,
-    ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM nodes), 2) as percentage
-FROM nodes
-WHERE subnet = '192.168.1'
-GROUP BY status;
-```
-
-**Most Frequently Seen Devices:**
-```sql
-SELECT ip_address, hostname, vendor, times_seen, last_seen
-FROM nodes
-WHERE times_seen > 5
-ORDER BY times_seen DESC
-LIMIT 20;
-```
-
-**Reserved IPs Report:**
-```sql
-SELECT n.ip_address, n.notes, n.reserved_by, n.reserved_at,
-       r.reserved_for, r.description
-FROM nodes n
-LEFT JOIN ip_reservations r ON n.ip_address = r.ip_address AND r.is_active = TRUE
-WHERE n.status = 'reserved'
-ORDER BY n.ip_address;
-```
-
-**Device History Timeline:**
-```sql
-SELECT h.recorded_at, h.status, h.hostname, h.vendor
-FROM node_history h
-JOIN nodes n ON h.node_id = n.id
-WHERE n.ip_address = '192.168.1.100'
-ORDER BY h.recorded_at DESC
-LIMIT 50;
-```
-
-**Scan Performance Metrics:**
-```sql
-SELECT 
-    DATE(scanned_at) as scan_date,
-    COUNT(*) as scan_count,
-    AVG(scan_duration) as avg_duration,
-    AVG(active_ips) as avg_active_devices,
-    MAX(active_ips) as max_devices
-FROM scan_history
-WHERE scanned_at > DATE_SUB(NOW(), INTERVAL 30 DAY)
-GROUP BY DATE(scanned_at)
-ORDER BY scan_date DESC;
-```
-
-**Vendor Distribution:**
-```sql
-SELECT 
-    vendor,
-    COUNT(*) as device_count
-FROM nodes
-WHERE vendor IS NOT NULL
-  AND status = 'up'
-GROUP BY vendor
-ORDER BY device_count DESC;
-```
-
-### Database Maintenance
-
-**Optimize Tables (Monthly):**
-```sql
-OPTIMIZE TABLE nodes;
-OPTIMIZE TABLE node_history;
-OPTIMIZE TABLE scan_history;
-OPTIMIZE TABLE ip_reservations;
-```
-
-**Archive Old History (Yearly):**
-```sql
--- Archive node_history older than 1 year
-DELETE FROM node_history 
-WHERE recorded_at < DATE_SUB(NOW(), INTERVAL 1 YEAR);
-
--- Archive scan_history older than 6 months
-DELETE FROM scan_history 
-WHERE scanned_at < DATE_SUB(NOW(), INTERVAL 6 MONTH);
-```
-
-**Backup Database:**
-```bash
-# From host
-docker exec ipam-mysql mysqldump -u ipmanager -pipmanager_pass_2024 ipmanager > backup-$(date +%Y%m%d).sql
-
-# Restore
-docker exec -i ipam-mysql mysql -u ipmanager -pipmanager_pass_2024 ipmanager < backup-20251208.sql
-```
-
----
-
-## Security Considerations
-
-### Current Security Posture
-
-**Development/Internal Use:**
-- Default passwords in docker-compose.yml
-- No authentication on frontend
-- Open network access to all ports
-- Root access to phpMyAdmin available
-
-**Acceptable For:**
-- Home lab environments
-- Internal corporate networks
-- Trusted network segments
-- Development/testing
-
-### Production Hardening Recommendations
-
-**1. Change Default Passwords:**
-```yaml
-environment:
-  MYSQL_ROOT_PASSWORD: <strong-random-password>
-  MYSQL_PASSWORD: <strong-random-password>
-```
-
-**2. Implement Authentication:**
-- Add OAuth2/JWT to FastAPI backend
-- Implement login screen on frontend
-- Use environment variables for credentials
-
-**3. Restrict Network Access:**
-```bash
-# Firewall rules (UFW example)
-sudo ufw allow from 192.168.1.0/24 to any port 3000
-sudo ufw allow from 192.168.1.0/24 to any port 8000
-sudo ufw deny 3306  # Don't expose MySQL externally
-sudo ufw deny 8080  # Restrict phpMyAdmin access
-```
-
-**4. Use HTTPS:**
-- Set up reverse proxy (nginx)
-- Obtain SSL certificates (Let's Encrypt)
-- Redirect HTTP to HTTPS
-
-**5. Enable phpMyAdmin 2FA:**
-- Configure in phpMyAdmin settings
-- Use Google Authenticator or similar
-
-**6. Regular Updates:**
-```bash
-# Update container images
-docker compose pull
+# Rebuild all services
+docker compose build
 docker compose up -d
-
-# Update Ubuntu host
-sudo apt update && sudo apt upgrade
 ```
 
-**7. Audit Logging:**
-- Enable MySQL query logging
-- Log API access
-- Monitor for suspicious activity
+### Database Backup
 
-**8. Backup Strategy:**
-- Daily automated database backups
-- Store backups off-system
-- Test restore procedures
+```bash
+# Backup database
+docker exec ipam-mysql mysqldump -uipmanager -pipmanager_pass_2024 ipmanager > backup-$(date +%Y%m%d).sql
+
+# Restore database
+docker exec -i ipam-mysql mysql -uipmanager -pipmanager_pass_2024 ipmanager < backup.sql
+```
+
+### Adding VMs to Monitoring
+
+```bash
+# Edit Prometheus targets
+nano monitoring/prometheus/targets/nodes.yml
+
+# Add VM targets
+- targets:
+    - '192.168.0.32:9100'
+    - '192.168.0.33:9100'
+  labels:
+    job: 'node_exporter'
+    environment: 'production'
+
+# Reload Prometheus (no restart needed)
+curl -X POST http://localhost:9090/-/reload
+
+# Verify targets
+curl http://localhost:9090/api/v1/targets | jq
+```
 
 ---
 
 ## Troubleshooting
 
-### Common Issues and Solutions
+### Containers Won't Start
 
-**Issue: Blank page on frontend**
-```
-Symptom: Browser shows blank white page
-Cause: JavaScript error, missing import, broken component
-Solution:
-1. Press F12 → Console tab
-2. Look for error messages
-3. Common fix: Check import statements
-4. Restore from backup if needed
-```
-
-**Issue: "NetworkError when attempting to fetch resource"**
-```
-Symptom: Scan button returns error
-Cause: Backend not running or not accessible
-Solution:
-docker compose logs ipam-backend --tail 50
-docker compose restart ipam-backend
-curl http://localhost:8000/health
-```
-
-**Issue: All IPs show as "up" (false positives)**
-```
-Symptom: Every IP address shows green
-Cause: Docker bridge networking instead of host mode
-Solution:
-Verify docker-compose.yml has:
-  network_mode: host
-Restart containers:
-  docker compose down && docker compose up -d
-```
-
-**Issue: MySQL connection failed**
-```
-Symptom: Backend shows database connection errors
-Cause: MySQL not ready or wrong credentials
-Solution:
-docker compose logs mysql --tail 30
-# Wait for "ready for connections" message
-# Verify credentials in docker-compose.yml match main.py
-docker compose restart ipam-backend
-```
-
-**Issue: nmap not found**
-```
-Symptom: Backend logs show "No such file or directory: 'nmap'"
-Cause: nmap not installed in container
-Solution:
-docker exec ipam-backend apt update
-docker exec ipam-backend apt install -y nmap
-docker compose restart ipam-backend
-```
-
-**Issue: Port already in use**
-```
-Symptom: "port is already allocated" error
-Cause: Another service using the port
-Solution:
-# Find what's using the port
-sudo netstat -tulpn | grep 3000
-# Stop conflicting service or change port in docker-compose.yml
-```
-
-**Issue: No networks detected**
-```
-Symptom: Network discovery modal shows "No networks detected"
-Cause: 'ip' command not available in container
-Solution:
-# Backend needs host network access
-Verify network_mode: host in docker-compose.yml
-Alternative: Hardcode IP in frontend isLocalhostIP function
-```
-
-**Issue: Permission denied on scan**
-```
-Symptom: nmap fails with permission errors
-Cause: Container not running in privileged mode
-Solution:
-Verify docker-compose.yml has:
-  privileged: true
-Restart: docker compose up -d
-```
-
-**Issue: Slow scans**
-```
-Symptom: Scan takes 2+ minutes
-Cause: Network congestion or host performance
-Solution:
-# Reduce scan range
-POST /api/scan with start_ip: 1, end_ip: 50
-# Or adjust nmap timing (in main.py)
-Change -T4 to -T3 (more polite) or -T5 (faster but aggressive)
-```
-
-### Log Locations
-
-**Container Logs:**
 ```bash
-docker compose logs ipam-backend
-docker compose logs ipam-frontend
-docker compose logs mysql
-docker compose logs phpmyadmin
+# Check Docker daemon
+sudo systemctl status docker
+
+# View detailed container status
+docker compose ps -a
+
+# Check specific container logs
+docker logs ipam-backend --tail 50
+
+# Remove and recreate containers
+docker compose down
+docker compose up -d --force-recreate
 ```
 
-**Application Logs:**
-- Backend: stdout/stderr (view with docker logs)
-- Frontend: Browser console (F12)
-- MySQL: Inside container at `/var/log/mysql/`
-- Scan errors: Written to backend stdout
+### Network Scanning Not Working
 
-**Debugging Tips:**
+**Symptoms:** Scan returns no results even though devices are active
+
+**Causes:**
+1. Backend not using host network mode
+2. Firewall blocking ICMP
+3. Backend container crashed
+
+**Solutions:**
 ```bash
-# Live tail all logs
-docker compose logs -f
+# Verify backend is in host mode
+docker inspect ipam-backend | grep -i network
 
-# Check container health
-docker compose ps
+# Should show: "NetworkMode": "host"
 
-# Enter container for debugging
-docker exec -it ipam-backend bash
-docker exec -it ipam-mysql mysql -u root -p
+# Test ICMP from backend
+docker exec ipam-backend ping -c 3 192.168.0.1
 
-# Test network connectivity from container
-docker exec ipam-backend ping 192.168.1.1
-docker exec ipam-backend nmap -sn 192.168.1.1
+# Check backend logs
+docker logs ipam-backend --tail 100 | grep -i scan
+
+# Restart backend
+docker compose restart backend
 ```
+
+### Database Connection Errors
+
+**Symptoms:** Backend can't connect to MySQL
+
+**Solutions:**
+```bash
+# Verify MySQL is running and healthy
+docker ps | grep mysql
+docker exec ipam-mysql mysqladmin ping -h localhost
+
+# Test connection from backend
+docker exec ipam-backend nc -zv 127.0.0.1 3306
+
+# Check MySQL logs
+docker logs ipam-mysql --tail 50
+
+# Restart MySQL
+docker compose restart mysql
+```
+
+### Prometheus Not Scraping Targets
+
+**Symptoms:** Targets show as "DOWN" in Prometheus
+
+**Solutions:**
+```bash
+# Check target configuration
+cat monitoring/prometheus/targets/nodes.yml
+
+# Test connectivity from Prometheus container
+docker exec prometheus wget -O- http://192.168.0.32:9100/metrics
+
+# Verify VM has node_exporter running
+ssh ubuntu@192.168.0.32 "systemctl status node_exporter"
+
+# Check Prometheus logs
+docker logs prometheus --tail 50
+```
+
+### System Reboot Issues
+
+**Problem:** Containers don't start after server reboot
+
+**Solution:**
+```bash
+# Verify Docker starts on boot
+sudo systemctl is-enabled docker
+sudo systemctl enable docker
+
+# Manually start containers after reboot
+cd /home/ubuntu/ipmanager
+docker compose up -d
+
+# Or if that doesn't work:
+docker compose down
+docker compose up -d
+```
+
+**Note:** All containers have `restart: unless-stopped` policy, so they should auto-start after reboot if Docker daemon starts correctly.
+
+---
+
+## Security Considerations
+
+### Network Security
+
+- Backend requires host network mode for scanning
+- Expose only to trusted 192.168.0.x network
+- Use firewall rules to restrict external access
+- Consider VPN for remote administration
+
+### Credential Management
+
+```bash
+# Secure .env file
+chmod 600 .env
+chown ubuntu:ubuntu .env
+
+# Rotate passwords regularly
+# Update docker-compose.yml environment variables
+# Restart affected containers
+```
+
+### SSH Key Management
+
+For traffic testing, backend needs SSH access to VMs:
+
+```bash
+# Generate SSH key for backend
+ssh-keygen -t ed25519 -f ~/.ssh/ipmanager_key
+
+# Add public key to managed VMs
+ssh-copy-id -i ~/.ssh/ipmanager_key ubuntu@192.168.0.32
+
+# Configure backend to use key
+# (Update backend/main.py with key_filename parameter)
+```
+
+### Database Security
+
+- MySQL only accepts connections from localhost (backend)
+- Use strong passwords (already configured)
+- Regular backups with encryption
+- Limit phpMyAdmin access to admin workstations
 
 ---
 
 ## Performance Optimization
 
-### Scan Performance
+### Database Tuning
 
-**Current Performance:**
-- Full /24 subnet (256 IPs): 15-30 seconds
-- Influenced by: network latency, active devices, nmap timing
-
-**Optimization Options:**
-
-**1. Parallel Scanning (Already Implemented):**
-- nmap handles concurrency internally
-- `-T4` timing profile balances speed and reliability
-
-**2. Reduce Scan Range:**
-```javascript
-// Frontend: Scan only likely range
-POST /api/scan
-{
-  "subnet": "192.168.1",
-  "start_ip": 10,
-  "end_ip": 100
-}
-```
-
-**3. Scheduled Background Scans:**
-```bash
-# Cron job for automated scanning
-*/15 * * * * curl -X POST http://localhost:8000/api/scan \
-  -H "Content-Type: application/json" \
-  -d '{"subnet":"192.168.1","start_ip":0,"end_ip":255}'
-```
-
-**4. Database Indexing (Already Implemented):**
 ```sql
--- Indexes on nodes table
-INDEX idx_ip (ip_address)
-INDEX idx_subnet (subnet)
-INDEX idx_status (status)
-INDEX idx_last_seen (last_seen)
+-- Add indexes for frequent queries
+CREATE INDEX idx_ip_status ON ip_addresses(status);
+CREATE INDEX idx_device_history_active ON device_history(active, last_seen);
+CREATE INDEX idx_traffic_tests_date ON vm_traffic_tests(created_at);
 ```
 
-### Frontend Performance
+### Prometheus Retention
 
-**Grid Rendering:**
-- 256 cells × React components = potential slowdown
-- Mitigation: CSS transforms instead of re-renders
-- Filter hiding uses opacity, not removal
-
-**Optimization Techniques:**
-```javascript
-// Use React.memo for cell components (future enhancement)
-const GridCell = React.memo(({ ip, status, ... }) => {
-  // Cell rendering
-});
-
-// Virtualization for very large grids (future)
-// Only render visible cells
+```yaml
+# Adjust in monitoring/prometheus/prometheus.yml
+storage:
+  tsdb:
+    retention.time: 30d    # Reduce to 7d for less storage
+    retention.size: 10GB   # Add size limit
 ```
 
-### Database Performance
+### Container Resource Limits
 
-**Connection Pooling:**
-```python
-# Already implemented
-pool_size = 10
-# Reuses connections instead of creating new ones
+```yaml
+# Add to docker-compose.yml for each service
+deploy:
+  resources:
+    limits:
+      cpus: '1.0'
+      memory: 1G
+    reservations:
+      cpus: '0.5'
+      memory: 512M
 ```
 
-**Query Optimization:**
-- Use indexes for all WHERE clauses
-- Limit result sets with LIMIT
-- Use prepared statements (automatic with mysql-connector)
+---
 
-**Archive Old Data:**
-- Move old node_history to archive table
-- Keep scan_history for 6 months max
-- Keeps active tables small and fast
+## Backup and Recovery
+
+### Full System Backup
+
+```bash
+#!/bin/bash
+# backup-ipmanager.sh
+
+BACKUP_DIR="/backup/ipmanager/$(date +%Y%m%d)"
+mkdir -p $BACKUP_DIR
+
+# Backup database
+docker exec ipam-mysql mysqldump -uipmanager -pipmanager_pass_2024 --all-databases > $BACKUP_DIR/database.sql
+
+# Backup Prometheus data
+docker exec prometheus tar czf - /prometheus > $BACKUP_DIR/prometheus-data.tar.gz
+
+# Backup Grafana dashboards
+docker exec grafana tar czf - /var/lib/grafana > $BACKUP_DIR/grafana-data.tar.gz
+
+# Backup configuration files
+tar czf $BACKUP_DIR/configs.tar.gz /home/ubuntu/ipmanager
+
+echo "Backup completed: $BACKUP_DIR"
+```
+
+### Recovery Procedure
+
+```bash
+# Stop containers
+cd /home/ubuntu/ipmanager
+docker compose down
+
+# Restore database
+docker exec -i ipam-mysql mysql -uroot -pipmanager_root_2024 < backup/database.sql
+
+# Restore configurations
+tar xzf backup/configs.tar.gz -C /
+
+# Restart containers
+docker compose up -d
+```
 
 ---
 
@@ -1328,124 +959,35 @@ pool_size = 10
 
 ### Planned Features
 
-**1. Port Scanning**
-```python
-# Add to scan arguments
-nm.scan(hosts=ip_range, arguments='-sn -p 22,80,443,3389')
-# Display open ports on detail modal
-```
+1. **DHCP Integration**
+   - Automatic IP reservation from DHCP
+   - Lease tracking and renewal
+   - Static IP assignment
 
-**2. Device Categorization**
-```sql
--- Add to nodes table
-ALTER TABLE nodes ADD COLUMN device_type VARCHAR(50);
--- Categories: Server, Workstation, Printer, IoT, Mobile, etc.
-```
+2. **VLAN Management**
+   - Multi-VLAN support
+   - Per-VLAN scanning
+   - VLAN-aware VM creation
 
-**3. Alerting System**
-```python
-# Email/Slack alerts for:
-- New devices detected
-- Devices offline > X hours
-- IP conflicts
-- Unauthorized devices
-```
+3. **Advanced Monitoring**
+   - Custom Grafana dashboards
+   - Automated alerting rules
+   - Anomaly detection
 
-**4. Network Topology Visualization**
-```javascript
-// Graph view showing:
-- Gateway at center
-- Devices as nodes
-- Connections as edges
-- Visual clustering by vendor/type
-```
+4. **API Authentication**
+   - JWT token authentication
+   - Role-based access control (RBAC)
+   - API rate limiting
 
-**5. DHCP Integration**
-```python
-# Read DHCP leases file
-- Compare scanned vs. leased IPs
-- Identify rogue devices
-- Match hostnames from DHCP
-```
+5. **Automated Testing**
+   - Scheduled network scans
+   - Periodic traffic tests
+   - Health check automation
 
-**6. Historical Graphs**
-```javascript
-// Charts showing:
-- Device count over time
-- Uptime patterns
-- Network usage trends
-- Vendor distribution changes
-```
-
-**7. Export/Import**
-```python
-# API endpoints for:
-POST /api/export/csv
-POST /api/export/json
-POST /api/import/csv
-- Bulk operations on nodes
-```
-
-**8. Mobile App**
-```
-React Native version:
-- Same functionality
-- Mobile-optimized grid
-- Push notifications
-- QR code scanning for device info
-```
-
-**9. Advanced Search**
-```javascript
-// Search by:
-- IP range
-- Vendor
-- Hostname pattern
-- Last seen date range
-- Custom note content
-```
-
-**10. Role-Based Access Control**
-```python
-# User roles:
-- Admin: Full access
-- Operator: Scan and view
-- Viewer: Read-only
-# Implement with JWT tokens
-```
-
-### Architectural Improvements
-
-**1. Microservices Split**
-```
-- Scanning service (dedicated)
-- API service (FastAPI)
-- Database service (MySQL)
-- Alert service (new)
-- Reporting service (new)
-```
-
-**2. Message Queue**
-```
-- Add RabbitMQ or Redis
-- Async scan processing
-- Better scalability
-```
-
-**3. Caching Layer**
-```
-- Redis for frequently accessed data
-- Reduce database load
-- Faster response times
-```
-
-**4. High Availability**
-```
-- Multiple backend instances
-- Load balancer (nginx)
-- MySQL replication
-- Failover capability
-```
+6. **Mobile App**
+   - iOS/Android native apps
+   - Push notifications
+   - Offline mode support
 
 ---
 
@@ -1453,201 +995,258 @@ React Native version:
 
 ### System Requirements
 
-**Minimum:**
-- CPU: 2 cores @ 2.0 GHz
-- RAM: 4 GB
-- Disk: 20 GB SSD
-- Network: 100 Mbps
+**Ubuntu Server:**
+- OS: Ubuntu 20.04 LTS or newer
+- CPU: 4+ cores recommended
+- RAM: 8GB minimum, 16GB recommended
+- Disk: 50GB+ SSD
+- Network: 1Gbps NIC
 
-**Recommended:**
-- CPU: 4 cores @ 2.5 GHz
-- RAM: 8 GB
-- Disk: 50 GB SSD
-- Network: 1 Gbps
+**Managed VMs:**
+- OS: Ubuntu 20.04+ or compatible Linux
+- RAM: 512MB minimum
+- Packages: node_exporter, iperf3, openssh-server
 
-**Optimal:**
-- CPU: 6+ cores @ 3.0+ GHz
-- RAM: 16 GB
-- Disk: 100 GB NVMe SSD
-- Network: 10 Gbps
+### Software Versions
 
-### Scalability Limits
+| Component | Version | Notes |
+|-----------|---------|-------|
+| Docker | 24.0+ | Container runtime |
+| Docker Compose | 2.20+ | Orchestration |
+| MySQL | 8.0 | Database |
+| Python | 3.9+ | Backend runtime |
+| Node.js | 18+ | Frontend build |
+| Prometheus | Latest | Metrics |
+| Grafana | Latest | Visualization |
 
-**Current Architecture:**
-- Max subnet size: /16 (65,536 IPs)
-- Realistic limit: /24 (256 IPs) per scan
-- Concurrent scans: 1 (sequential only)
-- Database: ~1 million nodes before optimization needed
-- Frontend: 256 cells rendered efficiently
+### Network Requirements
 
-**Performance Scaling:**
-| Network Size | Scan Time | DB Growth/Month |
-|-------------|-----------|-----------------|
-| /24 (256)   | 15-30 sec | ~5 MB          |
-| /23 (512)   | 30-60 sec | ~10 MB         |
-| /22 (1024)  | 1-2 min   | ~20 MB         |
-| /16 (65536) | 30-60 min | ~500 MB        |
-
-### Technology Versions
-
-**Container Images:**
-- mysql:8.0
-- ubuntu:24.04
-- node:18
-- phpmyadmin:latest
-
-**Python Packages:**
-- fastapi==0.104.1
-- uvicorn==0.24.0
-- python-nmap==0.7.1
-- pydantic==2.5.0
-- mysql-connector-python==8.2.0
-
-**JavaScript Libraries:**
-- react@18.x
-- Native Fetch API (no axios needed)
-
-**System Tools:**
-- nmap 7.94+
-- Docker 24.0+
-- Docker Compose 2.0+
+- Subnet: 192.168.0.0/24 (configurable)
+- ICMP: Enabled for scanning
+- Ports: 3000, 8000, 8080, 9090, 3001, 9093
+- Proxmox: API access on port 8006
 
 ---
 
-## Maintenance Procedures
+## Support and Maintenance
 
-### Daily Tasks
-- None required (system is self-maintaining)
-- Optional: Review scan results for anomalies
+### Routine Maintenance
 
-### Weekly Tasks
-- Review new devices detected
-- Update notes for unknown devices
-- Check for devices offline > 7 days
+**Daily:**
+- Monitor container health: `docker ps`
+- Review error logs: `docker compose logs | grep ERROR`
 
-### Monthly Tasks
-- Backup database
-- Review and clean old scan history
-- Optimize database tables
-- Update container images
-- Review reserved IPs for accuracy
+**Weekly:**
+- Database backup
+- Check disk usage: `df -h`
+- Review Grafana dashboards
 
-### Quarterly Tasks
-- Full security audit
-- Performance review
-- Archive old data (>6 months)
-- Update documentation
+**Monthly:**
+- Update Docker images: `docker compose pull`
+- Rotate logs: `docker system prune -f`
+- Security updates: `apt update && apt upgrade`
 
-### Annual Tasks
-- Major version updates
-- Hardware capacity planning
-- Disaster recovery test
-- Security penetration test
+### Getting Help
 
-### Backup Strategy
-
-**Automated Daily Backup:**
+**Log Collection:**
 ```bash
-#!/bin/bash
-# /usr/local/bin/ipmanager-backup.sh
-
-BACKUP_DIR="/backups/ipmanager"
-DATE=$(date +%Y%m%d)
-
-# Create backup directory
-mkdir -p $BACKUP_DIR
-
-# Backup MySQL database
-docker exec ipam-mysql mysqldump -u ipmanager -pipmanager_pass_2024 \
-  ipmanager > $BACKUP_DIR/ipmanager-$DATE.sql
-
-# Compress
-gzip $BACKUP_DIR/ipmanager-$DATE.sql
-
-# Remove backups older than 30 days
-find $BACKUP_DIR -name "*.sql.gz" -mtime +30 -delete
-
-echo "Backup completed: ipmanager-$DATE.sql.gz"
+# Collect all logs for debugging
+docker compose logs > ipmanager-logs.txt
+docker ps -a >> ipmanager-logs.txt
+docker compose ps >> ipmanager-logs.txt
 ```
 
-**Add to crontab:**
+**System Information:**
 ```bash
-# Run daily at 2 AM
-0 2 * * * /usr/local/bin/ipmanager-backup.sh >> /var/log/ipmanager-backup.log 2>&1
+# System details
+uname -a
+docker --version
+docker compose version
+free -h
+df -h
 ```
 
 ---
 
-## License and Credits
+## Changelog
 
-**System:** IP Manager v2.0  
-**Developer:** Francisco - Son2 Latin Music  
-**Location:** Tampa Bay, Florida  
-**Deployment:** December 8, 2025  
+### Version 2.0 (Current)
 
-**Technology Credits:**
-- FastAPI - Modern Python web framework
-- React - JavaScript UI library
-- MySQL - Relational database
-- nmap - Network scanning utility
-- Docker - Containerization platform
-- Ubuntu - Linux operating system
+**New Features:**
+- ✅ Unified deployment on single Ubuntu Server
+- ✅ All 7 containers managed by single docker-compose.yml
+- ✅ Auto-restart policy (unless-stopped) for all containers
+- ✅ Backend uses host network mode for direct scanning
+- ✅ Integrated Proxmox VM creation
+- ✅ Glassmorphism UI redesign
+- ✅ Complete monitoring stack (Prometheus + Grafana + Alertmanager)
+- ✅ Traffic testing with iperf3 integration
+- ✅ Device history tracking
+- ✅ Persistent volumes for all data
 
-**Open Source Components:**
-- python-nmap: GPLv3
-- FastAPI: MIT License
-- React: MIT License
-- MySQL: GPL
-- phpMyAdmin: GPL
+**Bug Fixes:**
+- ✅ Fixed network scanning reliability
+- ✅ Resolved container restart issues after system reboot
+- ✅ Corrected database connection handling
+- ✅ Fixed CORS issues between frontend and backend
+- ✅ Improved error handling throughout application
 
----
+**Infrastructure Changes:**
+- ✅ Moved from Windows to Ubuntu Server
+- ✅ Consolidated from multi-server to single-server deployment
+- ✅ Standardized on Docker Compose orchestration
+- ✅ Implemented health checks for all critical services
+- ✅ Added persistent volume management
 
-## Support and Documentation
+### Version 1.0 (Legacy)
 
-**Primary Documentation:**
-- This design document
-- API documentation: http://localhost:8000/docs
-- Code comments in source files
-
-**External Resources:**
-- FastAPI: https://fastapi.tiangolo.com/
-- React: https://react.dev/
-- nmap: https://nmap.org/book/
-- MySQL: https://dev.mysql.com/doc/
-
-**Internal Support:**
-- Review container logs for errors
-- Check phpMyAdmin for data verification
-- Test API endpoints at /docs interface
+- Basic IP scanning on Windows
+- Simple IP tracking
+- Manual database management
+- No containerization
 
 ---
 
-## Conclusion
+## Appendix A: docker-compose.yml
 
-IP Manager provides a comprehensive, visual, and persistent solution for network IP address management. The system successfully combines real-time scanning with historical tracking, reservation capabilities, and an intuitive user interface. 
+See `/home/ubuntu/ipmanager/docker-compose.yml` for complete configuration.
 
-**Key Achievements:**
-✅ Visual 16x16 grid representation of network  
-✅ Persistent device history in MySQL database  
-✅ IP reservation and custom notes system  
-✅ Multi-network discovery and switching  
-✅ Professional modern dark-themed UI  
-✅ Complete database management via phpMyAdmin  
-✅ Docker-based deployment for portability  
-
-**Production Ready For:**
-- Home network management
-- Small business networks
-- Lab environments
-- Network documentation
-- DHCP planning
-- Device inventory
-
-The system has been successfully deployed on Ubuntu Server 24.04.3 and is operational as of December 8, 2025.
+Key sections:
+- Services definition (7 containers)
+- Network configuration (bridge + host)
+- Volume mappings (persistent data)
+- Environment variables (credentials)
+- Health checks (MySQL)
+- Restart policies (unless-stopped)
 
 ---
 
+## Appendix B: API Reference
+
+### Scan Network
+
+```http
+GET /api/scan/{network}
+```
+
+Example: `GET /api/scan/192.168.0.0/24`
+
+Response:
+```json
+{
+  "active_hosts": [
+    {
+      "ip": "192.168.0.32",
+      "hostname": "vm-test-01",
+      "mac": "00:11:22:33:44:55",
+      "status": "active",
+      "vendor": "Proxmox"
+    }
+  ],
+  "scan_time": "2024-12-14T10:30:00Z",
+  "total_scanned": 254,
+  "active_count": 12
+}
+```
+
+### Create VM
+
+```http
+POST /api/create-vm
+Content-Type: application/json
+
+{
+  "vmid": 101,
+  "name": "new-vm",
+  "cores": 2,
+  "memory": 2048,
+  "disk": 32
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "vmid": 101,
+  "status": "running",
+  "created_at": "2024-12-14T10:35:00Z"
+}
+```
+
+### Run Traffic Test
+
+```http
+POST /api/traffic-test
+Content-Type: application/json
+
+{
+  "source_vm": "192.168.0.32",
+  "target_vm": "192.168.0.33",
+  "test_type": "tcp",
+  "duration": 60,
+  "bandwidth": "100M"
+}
+```
+
+Response:
+```json
+{
+  "test_id": 42,
+  "status": "completed",
+  "throughput_mbps": 95.2,
+  "packet_loss_pct": 0.0,
+  "jitter_ms": 0.5,
+  "test_duration": 60
+}
+```
+
+---
+
+## Appendix C: Monitoring Queries
+
+### Prometheus Queries
+
+**Network throughput:**
+```promql
+rate(node_network_receive_bytes_total{device="eth0"}[5m])
+```
+
+**CPU usage:**
+```promql
+100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+```
+
+**Memory usage:**
+```promql
+100 * (1 - ((node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)))
+```
+
+**Active iperf3 connections:**
+```promql
+iperf3_active_connections
+```
+
+---
+
+## Document Information
+
+**Author:** Francisco  
+**Organization:** Internal Infrastructure  
+**Last Revision:** December 14, 2024  
 **Document Version:** 2.0  
-**Last Updated:** December 08, 2025  
 **Status:** Production  
-**Next Review:** March 08, 2026
+
+**Related Documentation:**
+- Docker Compose Reference: docker-compose.yml
+- API Documentation: http://192.168.0.199:8000/docs
+- Proxmox API: https://pve.proxmox.com/wiki/Proxmox_VE_API
+
+**Revision History:**
+- v2.0 (2024-12-14): Complete rewrite for unified Ubuntu deployment
+- v1.5 (2024-11): Added monitoring stack integration
+- v1.0 (2024-10): Initial Windows-based design
+
+---
+
+**END OF DOCUMENT**

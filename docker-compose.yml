@@ -1,10 +1,15 @@
-version: '3.8'
+# version: '3.8'
 
 services:
+  # ========================================
+  # IP Manager Stack (4 containers)
+  # ========================================
+  
   mysql:
     image: mysql:8.0
     container_name: ipam-mysql
-    restart: unless-stopped
+    ports:
+      - "3306:3306"  # ADD THIS - expose to host    
     environment:
       MYSQL_ROOT_PASSWORD: ipmanager_root_2024
       MYSQL_DATABASE: ipmanager
@@ -13,68 +18,134 @@ services:
     volumes:
       - mysql-data:/var/lib/mysql
       - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "3306:3306"
+    networks:
+      - ipmanager-network
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      timeout: 20s
-      retries: 10
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  phpmyadmin:
-    image: phpmyadmin:latest
-    container_name: ipam-phpmyadmin
-    restart: unless-stopped
-    depends_on:
-      - mysql
-    environment:
-      PMA_HOST: mysql
-      PMA_PORT: 3306
-      PMA_USER: ipmanager
-      PMA_PASSWORD: ipmanager_pass_2024
-      MYSQL_ROOT_PASSWORD: ipmanager_root_2024
-      PMA_ABSOLUTE_URI: http://localhost:8080
-    ports:
-      - "8080:80"
-
-  ipam-backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+  backend:
+    build: ./backend
     container_name: ipam-backend
-    hostname: ipam-backend
-    restart: unless-stopped
-    privileged: true
     network_mode: host
-    depends_on:
-      mysql:
-        condition: service_healthy
+    # ports:
+    #   - "8000:8000"  # Add this instead of network_mode: host
+    # networks:
+    # - ipmanager-network  # Add this    
     environment:
-      - TZ=America/New_York
-      - PYTHONUNBUFFERED=1
-      - MYSQL_HOST=localhost
+      - MYSQL_HOST=127.0.0.1
       - MYSQL_PORT=3306
       - MYSQL_USER=ipmanager
       - MYSQL_PASSWORD=ipmanager_pass_2024
       - MYSQL_DATABASE=ipmanager
+      - PROXMOX_HOST=192.168.0.100
+      - PROXMOX_USER=root@pam
+      - PROXMOX_PASSWORD=${PROXMOX_PASSWORD}
+      - PROXMOX_NODE=pve
     volumes:
       - ./backend:/app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-  ipam-frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: ipam-frontend
-    hostname: ipam-frontend
+      - /tmp/traffic_tests:/tmp/traffic_tests
+    depends_on:
+      mysql:
+        condition: service_healthy
     restart: unless-stopped
-    network_mode: host
-    environment:
-      - REACT_APP_API_URL=http://localhost:8000
-      - CHOKIDAR_USEPOLLING=true
+
+  frontend:
+    build: ./frontend
+    container_name: ipam-frontend
+    ports:
+      - "3000:3000"
     volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
-    command: npm start
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: phpmyadmin
+    environment:
+      PMA_HOST: mysql
+      MYSQL_ROOT_PASSWORD: ipmanager_root_2024
+    ports:
+      - "8080:80"
+    networks:
+      - ipmanager-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ========================================
+  # Monitoring Stack (3 containers)
+  # ========================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/targets:/etc/prometheus/targets
+      - prometheus-data:/prometheus
+    networks:
+      - ipmanager-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - ipmanager-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+      - '--storage.path=/alertmanager'
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager
+      - alertmanager-data:/alertmanager
+    networks:
+      - ipmanager-network
+    restart: unless-stopped
+
+networks:
+  ipmanager-network:
+    driver: bridge
 
 volumes:
   mysql-data:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:

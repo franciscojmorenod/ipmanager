@@ -62,12 +62,7 @@ function App() {
   checkProxmoxStatus();
   }, []);
 
-  // Load active tests on mount
-  useEffect(() => {
-    loadActiveTests();
-    const interval = setInterval(loadActiveTests, 10000); // Refresh every 10 seconds
-    return () => clearInterval(interval);
-  }, []);
+
 
   const isLocalhostIP = (octet) => {
     const ip = `${subnet}.${octet}`;
@@ -467,7 +462,7 @@ const handleResetStatus = async () => {
 
   // =======================================================
 
-  // Traffic monitoring functions
+  // Add functions for traffic monitoring - Start
 
   const handleTrafficTest = (ipDetails) => {
     setTrafficSource(ipDetails);
@@ -499,7 +494,7 @@ const handleResetStatus = async () => {
       const data = await response.json();
 
       if (response.ok) {
-        alert(`✓ Traffic test started!\n\nTest ID: ${data.test_id}\nDuration: ${trafficConfig.duration}s\n\nMonitor progress in Grafana:\nhttp://localhost:3001`);
+        alert(`✓ Traffic test started!\n\nTest ID: ${data.test_id}\nDuration: ${trafficConfig.duration}s\n\nMonitor progress in Grafana:\nhttp://192.168.0.100:3001`);
         setShowTrafficModal(false);
 
         // Poll for results
@@ -578,12 +573,52 @@ const handleResetStatus = async () => {
   };
 
   const openGrafana = () => {
-    window.open('http://localhost:3001', '_blank');
+    window.open('http://192.168.0.100:3001', '_blank');
   };
 
   const openPrometheus = () => {
-    window.open('http://localhost:9090', '_blank');
+    window.open('http://192.168.0.100:9090', '_blank');
   };
+
+  // Load active tests on mount
+  useEffect(() => {
+    loadActiveTests();
+    const interval = setInterval(loadActiveTests, 10000); // Refresh every 10 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  // Add button in detail modal (after other action buttons)
+  // {selectedIP.status === 'up' && (
+  //   <>
+  //     <button 
+  //       className="action-btn btn-traffic"
+  //       onClick={() => handleTrafficTest(selectedIP)}
+  //     >
+  //       📊 Traffic Test
+  //     </button>
+
+  //     <button 
+  //       className="action-btn btn-check"
+  //       onClick={() => checkVMMonitoring(selectedIP.ip)}
+  //     >
+  //       🔍 Check Monitoring
+  //     </button>
+  //   </>
+  // )}
+
+  // Add monitoring buttons in header or control panel
+  // <div className="monitoring-links">
+  //   <button className="action-btn btn-grafana" onClick={openGrafana}>
+  //     📈 Open Grafana
+  //   </button>
+  //   <button className="action-btn btn-prometheus" onClick={openPrometheus}>
+  //     🔍 Open Prometheus
+  //   </button>
+  // </div>
+
+
+
+// Add functions for traffic monitoring - End
 
   
   // =======================================================
@@ -684,6 +719,28 @@ const handleResetStatus = async () => {
               </div>
 
           </div>
+
+          {/* {results.length > 0 && (
+            <div className="network-actions">
+              <button 
+                onClick={handleResetStatus}
+                className="action-btn btn-warning"
+                title="Reset all nodes to available (keeps history)"
+                disabled={scanning}
+              >
+                🔄 Reset Status
+              </button>
+
+              <button 
+                onClick={handleClearNetwork}
+                className="action-btn btn-danger"
+                title="Clear all data for this network"
+                disabled={scanning}
+              >
+                🗑️ Clear Network
+              </button>
+            </div>
+          )} */}
 
           {scanning && (
             <div className="progress-bar">
@@ -814,6 +871,24 @@ const handleResetStatus = async () => {
             <div className="modal-header">
               <div className={`status-badge ${getStatusColor(selectedIP.status)}`}>
                 {selectedIP.status === 'up' && '🟢'}
+                {selectedIP.status === 'up' && (
+                  <>
+                    <button 
+                      className="action-btn btn-traffic"
+                      onClick={() => handleTrafficTest(selectedIP)}
+                    >
+                      📊 Traffic Test
+                    </button>
+
+                    <button 
+                      className="action-btn btn-check"
+                      onClick={() => checkVMMonitoring(selectedIP.ip)}
+                    >
+                      🔍 Check Monitoring
+                    </button>
+                  </>
+                )}
+
                 {selectedIP.status === 'down' && '⚪'}
                 {selectedIP.status === 'previously_used' && '🟡'}
                 {selectedIP.status === 'reserved' && '🔒'}
@@ -926,23 +1001,6 @@ const handleResetStatus = async () => {
                   >
                     🖥️ Create Proxmox VM
                   </button>
-                )}
-                {selectedIP.status === 'up' && (
-                  <>
-                    <button 
-                      className="action-btn btn-traffic"
-                      onClick={() => handleTrafficTest(selectedIP)}
-                    >
-                      📊 Traffic Test
-                    </button>
-
-                    <button 
-                      className="action-btn btn-check"
-                      onClick={() => checkVMMonitoring(selectedIP.ip)}
-                    >
-                      🔍 Check Monitoring
-                    </button>
-                  </>
                 )}
 
               </div>
@@ -1289,246 +1347,254 @@ Examples:
         </div>
       )}
 
-      {/* Traffic Test Modal */}
-      {showTrafficModal && trafficSource && (
-        <div className="modal-overlay show" onClick={() => setShowTrafficModal(false)}>
-          <div className="modal glass traffic-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setShowTrafficModal(false)}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M18 6L6 18M6 6l12 12"/>
-              </svg>
-            </button>
 
-            <div className="modal-header">
-              <h2>📊 Network Traffic Test</h2>
-              <p style={{color: 'var(--text-secondary)', fontSize: '1rem', marginTop: '10px'}}>
-                Source: {trafficSource.ip} {trafficSource.hostname && `(${trafficSource.hostname})`}
-              </p>
-            </div>
-
-            <div className="modal-body">
-              <div className="form-group">
-                <label>Target VM *</label>
-                <select 
-                  value={trafficTarget}
-                  onChange={(e) => setTrafficTarget(e.target.value)}
-                  className="form-input"
-                >
-                  <option value="">Select target VM...</option>
-                  {results.filter(r => r.status === 'up' && r.ip !== trafficSource.ip).map(vm => (
-                    <option key={vm.ip} value={vm.ip}>
-                      {vm.ip} {vm.hostname ? `- ${vm.hostname}` : ''} {vm.vendor ? `(${vm.vendor})` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Protocol</label>
-                <div className="protocol-selector">
-                  <button
-                    className={`protocol-btn ${trafficConfig.protocol === 'tcp' ? 'active' : ''}`}
-                    onClick={() => setTrafficConfig({...trafficConfig, protocol: 'tcp'})}
-                  >
-                    TCP
-                  </button>
-                  <button
-                    className={`protocol-btn ${trafficConfig.protocol === 'udp' ? 'active' : ''}`}
-                    onClick={() => setTrafficConfig({...trafficConfig, protocol: 'udp'})}
-                  >
-                    UDP
-                  </button>
-                </div>
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Duration (seconds)</label>
-                  <input
-                    type="number"
-                    min="10"
-                    max="300"
-                    value={trafficConfig.duration}
-                    onChange={(e) => setTrafficConfig({...trafficConfig, duration: parseInt(e.target.value)})}
-                    className="form-input"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Bandwidth</label>
-                  <select
-                    value={trafficConfig.bandwidth}
-                    onChange={(e) => setTrafficConfig({...trafficConfig, bandwidth: e.target.value})}
-                    className="form-input"
-                  >
-                    <option value="10M">10 Mbps</option>
-                    <option value="100M">100 Mbps</option>
-                    <option value="500M">500 Mbps</option>
-                    <option value="1G">1 Gbps</option>
-                    <option value="10G">10 Gbps</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Parallel Streams</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={trafficConfig.parallel}
-                    onChange={(e) => setTrafficConfig({...trafficConfig, parallel: parseInt(e.target.value)})}
-                    className="form-input"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="checkbox-label">
-                    <input
-                      type="checkbox"
-                      checked={trafficConfig.reverse}
-                      onChange={(e) => setTrafficConfig({...trafficConfig, reverse: e.target.checked})}
-                    />
-                    <span>Reverse (server sends)</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="traffic-info">
-                <strong>💡 What will happen:</strong>
-                <ul>
-                  <li>iperf3 client runs on {trafficSource.ip}</li>
-                  <li>Sends {trafficConfig.protocol.toUpperCase()} traffic to {trafficTarget || 'target'}</li>
-                  <li>Test runs for {trafficConfig.duration} seconds</li>
-                  <li>Results shown in Grafana dashboard</li>
-                  <li>Metrics collected by Prometheus</li>
-                </ul>
-              </div>
-
-              <div className="modal-actions">
-                <button 
-                  className="action-btn btn-cancel"
-                  onClick={() => setShowTrafficModal(false)}
-                >
-                  Cancel
-                </button>
-                <button 
-                  className="action-btn btn-confirm"
-                  onClick={handleStartTraffic}
-                  disabled={!trafficTarget}
-                >
-                  🚀 Start Test
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Test Results Modal */}
-      {showResults && testResults && (
-        <div className="modal-overlay show" onClick={() => setShowResults(false)}>
-          <div className="modal glass results-modal" onClick={(e) => e.stopPropagation()}>
-            <button className="modal-close" onClick={() => setShowResults(false)}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M18 6L6 18M6 6l12 12"/>
-              </svg>
-            </button>
-
-            <div className="modal-header">
-              <h2>📊 Test Results</h2>
-              <p>Test ID: {testResults.test_id}</p>
-            </div>
-
-            <div className="modal-body">
-              {testResults.status === 'completed' ? (
-                <div className="results-content">
-                  <div className="result-summary">
-                    <div className="result-item">
-                      <div className="result-label">Source</div>
-                      <div className="result-value">{testResults.source}</div>
-                    </div>
-                    <div className="result-item">
-                      <div className="result-label">Target</div>
-                      <div className="result-value">{testResults.target}</div>
-                    </div>
-                    <div className="result-item">
-                      <div className="result-label">Protocol</div>
-                      <div className="result-value">{testResults.protocol.toUpperCase()}</div>
-                    </div>
-                  </div>
-
-                  <div className="result-metrics">
-                    <div className="metric-card">
-                      <div className="metric-value">{testResults.bandwidth_mbps} Mbps</div>
-                      <div className="metric-label">Average Bandwidth</div>
-                    </div>
-
-                    <div className="metric-card">
-                      <div className="metric-value">{(testResults.bytes_transferred / 1048576).toFixed(2)} MB</div>
-                      <div className="metric-label">Data Transferred</div>
-                    </div>
-
-                    {testResults.protocol === 'tcp' && (
-                      <div className="metric-card">
-                        <div className="metric-value">{testResults.retransmits || 0}</div>
-                        <div className="metric-label">Retransmits</div>
-                      </div>
-                    )}
-
-                    {testResults.protocol === 'udp' && (
-                      <>
-                        <div className="metric-card">
-                          <div className="metric-value">{testResults.jitter_ms?.toFixed(2) || 0} ms</div>
-                          <div className="metric-label">Jitter</div>
-                        </div>
-
-                        <div className="metric-card">
-                          <div className="metric-value">{testResults.lost_percent?.toFixed(2) || 0}%</div>
-                          <div className="metric-label">Packet Loss</div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  <button 
-                    className="action-btn btn-primary"
-                    onClick={openGrafana}
-                    style={{width: '100%', marginTop: '20px'}}
-                  >
-                    📈 View Detailed Graphs in Grafana
-                  </button>
-                </div>
-              ) : (
-                <div className="results-error">
-                  <p>Test failed: {testResults.error}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Active Tests Sidebar */}
-      {activeTests.length > 0 && (
-        <div className="active-tests-sidebar">
-          <h3>Active Tests</h3>
-          {activeTests.map(test => (
-            <div key={test.test_id} className={`test-item test-${test.status}`}>
-              <div className="test-header">
-                {test.source_ip} → {test.target_ip}
-              </div>
-              <div className="test-details">
-                {test.protocol.toUpperCase()} • {test.status}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
     </div>
   );
+
+  {/**************************/}
+
+
+  // Traffic Test Modal
+  {showTrafficModal && trafficSource && (
+    <div className="modal-overlay show" onClick={() => setShowTrafficModal(false)}>
+      <div className="modal glass traffic-modal" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={() => setShowTrafficModal(false)}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+
+        <div className="modal-header">
+          <h2>📊 Network Traffic Test</h2>
+          <p style={{color: 'var(--text-secondary)', fontSize: '1rem', marginTop: '10px'}}>
+            Source: {trafficSource.ip} {trafficSource.hostname && `(${trafficSource.hostname})`}
+          </p>
+        </div>
+
+        <div className="modal-body">
+          <div className="form-group">
+            <label>Target VM *</label>
+            <select 
+              value={trafficTarget}
+              onChange={(e) => setTrafficTarget(e.target.value)}
+              className="form-input"
+            >
+              <option value="">Select target VM...</option>
+              {results.filter(r => r.status === 'up' && r.ip !== trafficSource.ip).map(vm => (
+                <option key={vm.ip} value={vm.ip}>
+                  {vm.ip} {vm.hostname ? `- ${vm.hostname}` : ''} {vm.vendor ? `(${vm.vendor})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Protocol</label>
+            <div className="protocol-selector">
+              <button
+                className={`protocol-btn ${trafficConfig.protocol === 'tcp' ? 'active' : ''}`}
+                onClick={() => setTrafficConfig({...trafficConfig, protocol: 'tcp'})}
+              >
+                TCP
+              </button>
+              <button
+                className={`protocol-btn ${trafficConfig.protocol === 'udp' ? 'active' : ''}`}
+                onClick={() => setTrafficConfig({...trafficConfig, protocol: 'udp'})}
+              >
+                UDP
+              </button>
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Duration (seconds)</label>
+              <input
+                type="number"
+                min="10"
+                max="300"
+                value={trafficConfig.duration}
+                onChange={(e) => setTrafficConfig({...trafficConfig, duration: parseInt(e.target.value)})}
+                className="form-input"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Bandwidth</label>
+              <select
+                value={trafficConfig.bandwidth}
+                onChange={(e) => setTrafficConfig({...trafficConfig, bandwidth: e.target.value})}
+                className="form-input"
+              >
+                <option value="10M">10 Mbps</option>
+                <option value="100M">100 Mbps</option>
+                <option value="500M">500 Mbps</option>
+                <option value="1G">1 Gbps</option>
+                <option value="10G">10 Gbps</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-row">
+            <div className="form-group">
+              <label>Parallel Streams</label>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                value={trafficConfig.parallel}
+                onChange={(e) => setTrafficConfig({...trafficConfig, parallel: parseInt(e.target.value)})}
+                className="form-input"
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={trafficConfig.reverse}
+                  onChange={(e) => setTrafficConfig({...trafficConfig, reverse: e.target.checked})}
+                />
+                <span>Reverse (server sends)</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="traffic-info">
+            <strong>💡 What will happen:</strong>
+            <ul>
+              <li>iperf3 client runs on {trafficSource.ip}</li>
+              <li>Sends {trafficConfig.protocol.toUpperCase()} traffic to {trafficTarget || 'target'}</li>
+              <li>Test runs for {trafficConfig.duration} seconds</li>
+              <li>Results shown in Grafana dashboard</li>
+              <li>Metrics collected by Prometheus</li>
+            </ul>
+          </div>
+
+          <div className="modal-actions">
+            <button 
+              className="action-btn btn-cancel"
+              onClick={() => setShowTrafficModal(false)}
+            >
+              Cancel
+            </button>
+            <button 
+              className="action-btn btn-confirm"
+              onClick={handleStartTraffic}
+              disabled={!trafficTarget}
+            >
+              🚀 Start Test
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )}
+
+  // Test Results Modal
+  {showResults && testResults && (
+    <div className="modal-overlay show" onClick={() => setShowResults(false)}>
+      <div className="modal glass results-modal" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={() => setShowResults(false)}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+
+        <div className="modal-header">
+          <h2>📊 Test Results</h2>
+          <p>Test ID: {testResults.test_id}</p>
+        </div>
+
+        <div className="modal-body">
+          {testResults.status === 'completed' ? (
+            <div className="results-content">
+              <div className="result-summary">
+                <div className="result-item">
+                  <div className="result-label">Source</div>
+                  <div className="result-value">{testResults.source}</div>
+                </div>
+                <div className="result-item">
+                  <div className="result-label">Target</div>
+                  <div className="result-value">{testResults.target}</div>
+                </div>
+                <div className="result-item">
+                  <div className="result-label">Protocol</div>
+                  <div className="result-value">{testResults.protocol.toUpperCase()}</div>
+                </div>
+              </div>
+
+              <div className="result-metrics">
+                <div className="metric-card">
+                  <div className="metric-value">{testResults.bandwidth_mbps} Mbps</div>
+                  <div className="metric-label">Average Bandwidth</div>
+                </div>
+
+                <div className="metric-card">
+                  <div className="metric-value">{(testResults.bytes_transferred / 1048576).toFixed(2)} MB</div>
+                  <div className="metric-label">Data Transferred</div>
+                </div>
+
+                {testResults.protocol === 'tcp' && (
+                  <div className="metric-card">
+                    <div className="metric-value">{testResults.retransmits || 0}</div>
+                    <div className="metric-label">Retransmits</div>
+                  </div>
+                )}
+
+                {testResults.protocol === 'udp' && (
+                  <>
+                    <div className="metric-card">
+                      <div className="metric-value">{testResults.jitter_ms?.toFixed(2) || 0} ms</div>
+                      <div className="metric-label">Jitter</div>
+                    </div>
+
+                    <div className="metric-card">
+                      <div className="metric-value">{testResults.lost_percent?.toFixed(2) || 0}%</div>
+                      <div className="metric-label">Packet Loss</div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <button 
+                className="action-btn btn-primary"
+                onClick={openGrafana}
+                style={{width: '100%', marginTop: '20px'}}
+              >
+                📈 View Detailed Graphs in Grafana
+              </button>
+            </div>
+          ) : (
+            <div className="results-error">
+              <p>Test failed: {testResults.error}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )}
+
+  // Active Tests Sidebar (optional)
+  {activeTests.length > 0 && (
+    <div className="active-tests-sidebar">
+      <h3>Active Tests</h3>
+      {activeTests.map(test => (
+        <div key={test.test_id} className={`test-item test-${test.status}`}>
+          <div className="test-header">
+            {test.source_ip} → {test.target_ip}
+          </div>
+          <div className="test-details">
+            {test.protocol.toUpperCase()} • {test.status}
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+
+  {/**************************/}
+
 }
 
 export default App;

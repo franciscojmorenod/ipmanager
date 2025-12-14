@@ -167,6 +167,64 @@ def update_or_create_node(conn, ip_address, subnet, last_octet, status, hostname
     cursor.close()
 # =============================================2    
 
+# def update_or_create_node(conn, ip_address, subnet, last_octet, status, hostname=None, mac=None, vendor=None):
+#     """Update existing node or create new one"""
+#     cursor = conn.cursor(dictionary=True)
+    
+#     # Check if node exists
+#     cursor.execute("SELECT * FROM nodes WHERE ip_address = %s", (ip_address,))
+#     existing = cursor.fetchone()
+    
+#     if existing:
+#         # Node exists - update it
+#         if status == 'up':
+#             # Device is back online
+#             cursor.execute("""
+#                 UPDATE nodes 
+#                 SET status = %s, hostname = %s, mac_address = %s, vendor = %s,
+#                     last_seen = NOW(), last_scanned = NOW(), times_seen = times_seen + 1
+#                 WHERE ip_address = %s
+#             """, (status, hostname, mac, vendor, ip_address))
+            
+#             # Record in history
+#             cursor.execute("""
+#                 INSERT INTO node_history (node_id, ip_address, status, hostname, mac_address, vendor)
+#                 VALUES (%s, %s, %s, %s, %s, %s)
+#             """, (existing['id'], ip_address, status, hostname, mac, vendor))
+#         else:
+#             # Device is offline - mark as previously_used if it was seen before
+#             if existing['times_seen'] > 0:
+#                 cursor.execute("""
+#                     UPDATE nodes 
+#                     SET status = 'previously_used', last_scanned = NOW()
+#                     WHERE ip_address = %s AND status != 'reserved'
+#                 """, (ip_address,))
+#             else:
+#                 cursor.execute("""
+#                     UPDATE nodes 
+#                     SET status = %s, last_scanned = NOW()
+#                     WHERE ip_address = %s AND status != 'reserved'
+#                 """, (status, ip_address))
+#     else:
+#         # New node - create it
+#         new_status = status if status == 'up' else 'down'
+#         cursor.execute("""
+#             INSERT INTO nodes (ip_address, subnet, last_octet, status, hostname, mac_address, vendor)
+#             VALUES (%s, %s, %s, %s, %s, %s, %s)
+#         """, (ip_address, subnet, last_octet, new_status, hostname, mac, vendor))
+        
+#         if status == 'up':
+#             node_id = cursor.lastrowid
+#             cursor.execute("""
+#                 INSERT INTO node_history (node_id, ip_address, status, hostname, mac_address, vendor)
+#                 VALUES (%s, %s, %s, %s, %s, %s)
+#             """, (node_id, ip_address, status, hostname, mac, vendor))
+    
+#     conn.commit()
+#     cursor.close()
+
+
+
 
 
 
@@ -884,6 +942,58 @@ class SSHManager:
         self.key_file = key_file
         self.connections = {}
     
+    # def connect(self, host: str, port: int = 22):
+    #     """Establish SSH connection to host"""
+    #     try:
+    #         client = paramiko.SSHClient()
+    #         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+    #         if self.key_file:
+    #             client.connect(host, port=port, username=self.username, key_filename=self.key_file, timeout=10)
+    #         else:
+    #             client.connect(host, port=port, username=self.username, password=self.password, timeout=10)
+            
+    #         self.connections[host] = client
+    #         return client
+    #     except Exception as e:
+    #         print(f"SSH connection failed to {host}: {e}")
+    #         return None
+    # def connect(self, host: str, port: int = 22):
+    #     """Establish SSH connection to host"""
+    #     try:
+    #         client = paramiko.SSHClient()
+    #         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+    #         # Try both password and keyboard-interactive
+    #         if self.key_file:
+    #             client.connect(
+    #                 host, 
+    #                 port=port, 
+    #                 username=self.username, 
+    #                 key_filename=self.key_file, 
+    #                 timeout=10,
+    #                 allow_agent=False,
+    #                 look_for_keys=False
+    #             )
+    #         else:
+    #             client.connect(
+    #                 host, 
+    #                 port=port, 
+    #                 username=self.username, 
+    #                 password=self.password, 
+    #                 timeout=10,
+    #                 allow_agent=False,
+    #                 look_for_keys=False,
+    #                 disabled_algorithms={'pubkeys': ['rsa-sha2-256', 'rsa-sha2-512']}
+    #             )
+            
+    #         self.connections[host] = client
+    #         return client
+    #     except Exception as e:
+    #         print(f"SSH connection failed to {host}: {e}")
+    #         import traceback
+    #         traceback.print_exc()
+    #         return None    
     def connect(self, host: str, port: int = 22):
         """Establish SSH connection to host"""
         try:
@@ -1045,30 +1155,22 @@ async def get_traffic_test_results(test_id: str):
         return {"status": "completed", "message": "No results available"}
     
     try:
-        # For UDP use "sum", for TCP use "sum_received"
-        if test.protocol == "udp":
-            end_data = results.get("end", {}).get("sum", {})
-        else:
-            end_data = results.get("end", {}).get("sum_received", {})
-        
         summary = {
             "test_id": test_id,
             "source": test.source_ip,
             "target": test.target_ip,
             "protocol": test.protocol,
-            "status": "completed",
-            "bandwidth_bps": end_data.get("bits_per_second", 0),
-            "bandwidth_mbps": round(end_data.get("bits_per_second", 0) / 1000000, 2),
-            "bytes_transferred": end_data.get("bytes", 0),
-            "retransmits": results.get("end", {}).get("sum_sent", {}).get("retransmits", 0) if test.protocol == "tcp" else 0,
-            "jitter_ms": end_data.get("jitter_ms", 0),
-            "lost_packets": end_data.get("lost_packets", 0),
-            "packets": end_data.get("packets", 0),
-            "lost_percent": end_data.get("lost_percent", 0),
+            "bandwidth_bps": results.get("end", {}).get("sum_received", {}).get("bits_per_second", 0),
+            "bandwidth_mbps": round(results.get("end", {}).get("sum_received", {}).get("bits_per_second", 0) / 1000000, 2),
+            "bytes_transferred": results.get("end", {}).get("sum_received", {}).get("bytes", 0),
+            "retransmits": results.get("end", {}).get("sum_sent", {}).get("retransmits", 0),
+            "jitter_ms": results.get("end", {}).get("sum", {}).get("jitter_ms", 0),
+            "lost_packets": results.get("end", {}).get("sum", {}).get("lost_packets", 0),
+            "packets": results.get("end", {}).get("sum", {}).get("packets", 0),
+            "lost_percent": results.get("end", {}).get("sum", {}).get("lost_percent", 0),
             "raw_results": results
         }
-        return summary    
-    
+        return summary
     except Exception as e:
         return {"status": "completed", "results": results, "parse_error": str(e)}
 

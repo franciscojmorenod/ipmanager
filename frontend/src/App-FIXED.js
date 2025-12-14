@@ -499,7 +499,7 @@ const handleResetStatus = async () => {
       const data = await response.json();
 
       if (response.ok) {
-        alert(`✓ Traffic test started!\n\nTest ID: ${data.test_id}\nDuration: ${trafficConfig.duration}s\n\nMonitor progress in Grafana:\nhttp://localhost:3001`);
+        alert(`✓ Traffic test started!\n\nTest ID: ${data.test_id}\nDuration: ${trafficConfig.duration}s\n\nMonitor progress in Grafana:\nhttp://192.168.0.100:3001`);
         setShowTrafficModal(false);
 
         // Poll for results
@@ -578,11 +578,11 @@ const handleResetStatus = async () => {
   };
 
   const openGrafana = () => {
-    window.open('http://localhost:3001', '_blank');
+    window.open('http://192.168.0.100:3001', '_blank');
   };
 
   const openPrometheus = () => {
-    window.open('http://localhost:9090', '_blank');
+    window.open('http://192.168.0.100:9090', '_blank');
   };
 
   

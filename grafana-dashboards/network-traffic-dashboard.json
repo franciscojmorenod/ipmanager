@@ -1,0 +1,277 @@
+{
+  "dashboard": {
+    "title": "Network Traffic Monitoring",
+    "tags": ["network", "iperf3", "traffic"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "type": "graph",
+        "title": "Network Bandwidth (TX)",
+        "targets": [
+          {
+            "expr": "rate(node_network_transmit_bytes_total{device=\"ens18\"}[1m]) * 8 / 1000000",
+            "legendFormat": "{{instance}} TX",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "Mbits",
+            "label": "Bandwidth"
+          },
+          {
+            "format": "short"
+          }
+        ],
+        "xaxis": {
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 2,
+        "linewidth": 2,
+        "nullPointMode": "null",
+        "legend": {
+          "show": true,
+          "values": true,
+          "current": true,
+          "max": true,
+          "avg": true
+        }
+      },
+      {
+        "id": 2,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "type": "graph",
+        "title": "Network Bandwidth (RX)",
+        "targets": [
+          {
+            "expr": "rate(node_network_receive_bytes_total{device=\"ens18\"}[1m]) * 8 / 1000000",
+            "legendFormat": "{{instance}} RX",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "Mbits",
+            "label": "Bandwidth"
+          },
+          {
+            "format": "short"
+          }
+        ],
+        "xaxis": {
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 2,
+        "linewidth": 2,
+        "nullPointMode": "null",
+        "legend": {
+          "show": true,
+          "values": true,
+          "current": true,
+          "max": true,
+          "avg": true
+        }
+      },
+      {
+        "id": 3,
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "type": "graph",
+        "title": "Network Packets (TX)",
+        "targets": [
+          {
+            "expr": "rate(node_network_transmit_packets_total{device=\"ens18\"}[1m])",
+            "legendFormat": "{{instance}} TX packets",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "pps",
+            "label": "Packets/sec"
+          },
+          {
+            "format": "short"
+          }
+        ],
+        "xaxis": {
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2
+      },
+      {
+        "id": 4,
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+        "type": "graph",
+        "title": "Network Packets (RX)",
+        "targets": [
+          {
+            "expr": "rate(node_network_receive_packets_total{device=\"ens18\"}[1m])",
+            "legendFormat": "{{instance}} RX packets",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "pps",
+            "label": "Packets/sec"
+          },
+          {
+            "format": "short"
+          }
+        ],
+        "xaxis": {
+          "mode": "time"
+        },
+        "lines": true,
+        "fill": 1,
+        "linewidth": 2
+      },
+      {
+        "id": 5,
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+        "type": "graph",
+        "title": "Network Errors & Drops",
+        "targets": [
+          {
+            "expr": "rate(node_network_transmit_errs_total{device=\"ens18\"}[1m])",
+            "legendFormat": "{{instance}} TX errors",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(node_network_receive_errs_total{device=\"ens18\"}[1m])",
+            "legendFormat": "{{instance}} RX errors",
+            "refId": "B"
+          },
+          {
+            "expr": "rate(node_network_transmit_drop_total{device=\"ens18\"}[1m])",
+            "legendFormat": "{{instance}} TX drops",
+            "refId": "C"
+          },
+          {
+            "expr": "rate(node_network_receive_drop_total{device=\"ens18\"}[1m])",
+            "legendFormat": "{{instance}} RX drops",
+            "refId": "D"
+          }
+        ],
+        "yaxes": [
+          {
+            "format": "short",
+            "label": "Errors/sec"
+          }
+        ],
+        "lines": true,
+        "fill": 0,
+        "linewidth": 2
+      },
+      {
+        "id": 6,
+        "gridPos": {"h": 6, "w": 8, "x": 0, "y": 24},
+        "type": "stat",
+        "title": "Current TX Bandwidth",
+        "targets": [
+          {
+            "expr": "rate(node_network_transmit_bytes_total{device=\"ens18\"}[1m]) * 8 / 1000000",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "Mbits",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 100, "color": "yellow"},
+                {"value": 500, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 7,
+        "gridPos": {"h": 6, "w": 8, "x": 8, "y": 24},
+        "type": "stat",
+        "title": "Current RX Bandwidth",
+        "targets": [
+          {
+            "expr": "rate(node_network_receive_bytes_total{device=\"ens18\"}[1m]) * 8 / 1000000",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "Mbits",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 100, "color": "yellow"},
+                {"value": 500, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 8,
+        "gridPos": {"h": 6, "w": 8, "x": 16, "y": 24},
+        "type": "stat",
+        "title": "Total Data Transferred",
+        "targets": [
+          {
+            "expr": "node_network_transmit_bytes_total{device=\"ens18\"} + node_network_receive_bytes_total{device=\"ens18\"}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "bytes",
+            "decimals": 2
+          }
+        }
+      }
+    ],
+    "schemaVersion": 38,
+    "version": 0,
+    "refresh": "5s",
+    "time": {
+      "from": "now-15m",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"]
+    }
+  },
+  "overwrite": true
+}

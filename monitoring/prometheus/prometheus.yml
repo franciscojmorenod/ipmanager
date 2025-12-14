@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Node exporters on VMs
+  - job_name: 'node_exporter'
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/targets/nodes.yml'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # iperf3 servers
+  - job_name: 'iperf3'
+    file_sd_configs:
+      - files:
+          - '/etc/prometheus/targets/iperf.yml'
