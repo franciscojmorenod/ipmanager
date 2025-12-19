@@ -6,15 +6,27 @@ Tracks node history and allows IP reassignment
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
-from typing import List, Optional
+#from typing import List, Optional
 import nmap
 import asyncio
 from datetime import datetime
 import mysql.connector
 from mysql.connector import pooling
+
 import os
 import subprocess
 import re
+from pathlib import Path
+
+import paramiko
+import json
+import time
+import uuid
+from typing import List, Optional, Dict
+from datetime import datetime
+import yaml
+import threading
+
 
 app = FastAPI(title="IP Manager API", version="2.0.0")
 
@@ -102,6 +114,58 @@ class ScanResponse(BaseModel):
     reserved_ips: int
     scan_time: float
     results: List[IPStatus]
+
+
+# =============================================0
+
+def add_prometheus_target(ip_address: str):
+    """Add a new VM to Prometheus targets"""
+    targets_file = Path("/app/monitoring/prometheus/targets/nodes.yml")
+    
+    try:
+        # Read existing targets
+        if targets_file.exists():
+            with open(targets_file, 'r') as f:
+                data = yaml.safe_load(f) or []
+        else:
+            data = []
+        
+        # Ensure we have the right structure
+        if not data:
+            data = [{
+                'targets': [],
+                'labels': {
+                    'job': 'node_exporter',
+                    'environment': 'production'
+                }
+            }]
+        
+        # Add new target if not already present
+        new_target = f"{ip_address}:9100"
+        if new_target not in data[0]['targets']:
+            data[0]['targets'].append(new_target)
+            data[0]['targets'].sort()  # Keep sorted
+            
+            # Write back to file
+            with open(targets_file, 'w') as f:
+                yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+            
+            # Reload Prometheus
+            try:
+                import requests
+                requests.post('http://localhost:9090/-/reload', timeout=5)
+                print(f"✓ Added {ip_address} to Prometheus targets and reloaded")
+            except Exception as e:
+                print(f"⚠ Added target but couldn't reload Prometheus: {e}")
+            
+            return True
+        else:
+            print(f"Target {ip_address} already exists in Prometheus")
+            return False
+            
+    except Exception as e:
+        print(f"Failed to add Prometheus target: {e}")
+        return False
 
 
 # =============================================1
@@ -577,8 +641,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 PROXMOX_HOST = os.getenv("PROXMOX_HOST", "192.168.0.100")
 PROXMOX_PORT = os.getenv("PROXMOX_PORT", "8006")
 PROXMOX_USER = os.getenv("PROXMOX_USER", "root@pam")
-PROXMOX_PASSWORD = os.getenv("PROXMOX_PASSWORD", "sicurumero")
-PROXMOX_NODE = os.getenv("PROXMOX_NODE", "pve")
+PROXMOX_PASSWORD = os.getenv("PROXMOX_PASSWORD")
+PROXMOX_NODE = os.getenv("PROXMOX_NODE", "proxmox")
 
 class ProxmoxAPI:
     """Proxmox VE API Client"""
@@ -658,7 +722,7 @@ async def proxmox_status():
         if not PROXMOX_PASSWORD:
             return {"connected": False, "error": "Proxmox credentials not configured"}
         
-        proxmox = ProxmoxAPI(PROXMOX_HOST, PROXMOX_PORT, PROXMOX_USER, PROXMOX_PASSWORD)
+        proxmox = ProxmoxAPI(PROXMOX_HOST, PROXMOX_PORT, PROXMOX_USER, PROXMOX_PASSWORD, verify_ssl=False)
         version = proxmox.get("version")
         
         return {
@@ -674,7 +738,7 @@ async def proxmox_status():
 async def get_proxmox_templates():
     """Get list of available VM templates"""
     try:
-        proxmox = ProxmoxAPI(PROXMOX_HOST, PROXMOX_PORT, PROXMOX_USER, PROXMOX_PASSWORD)
+        proxmox = ProxmoxAPI(PROXMOX_HOST, PROXMOX_PORT, PROXMOX_USER, PROXMOX_PASSWORD, verify_ssl=False)
         vms = proxmox.get(f"nodes/{PROXMOX_NODE}/qemu")
         
         templates = []
@@ -696,7 +760,7 @@ async def get_proxmox_templates():
 async def get_next_vmid():
     """Get next available VM ID"""
     try:
-        proxmox = ProxmoxAPI(PROXMOX_HOST, PROXMOX_PORT, PROXMOX_USER, PROXMOX_PASSWORD)
+        proxmox = ProxmoxAPI(PROXMOX_HOST, PROXMOX_PORT, PROXMOX_USER, PROXMOX_PASSWORD, verify_ssl=False)
         next_id = proxmox.get("cluster/nextid")
         return {"next_vmid": int(next_id)}
     except Exception as e:
@@ -706,7 +770,7 @@ async def get_next_vmid():
 async def create_proxmox_vm(request: ProxmoxVMRequest):
     """Create a new Proxmox VM with specified IP"""
     try:
-        proxmox = ProxmoxAPI(PROXMOX_HOST, PROXMOX_PORT, PROXMOX_USER, PROXMOX_PASSWORD)
+        proxmox = ProxmoxAPI(PROXMOX_HOST, PROXMOX_PORT, PROXMOX_USER, PROXMOX_PASSWORD, verify_ssl=False)
         vmid = int(proxmox.get("cluster/nextid"))
         
         subnet_parts = request.ip_address.split('.')
@@ -762,6 +826,8 @@ async def create_proxmox_vm(request: ProxmoxVMRequest):
             conn.commit()
             cursor.close()
             conn.close()
+        
+        add_prometheus_target(request.ip_address)            
         
         return {
             "success": True,
@@ -846,14 +912,7 @@ async def reset_network_status(subnet: str):
 # Traffic Monitoring Integration
 # ============================================================================
 
-import paramiko
-import json
-import time
-import uuid
-from typing import List, Optional, Dict
-from datetime import datetime
-import yaml
-import threading
+
 
 class TrafficTestRequest(BaseModel):
     source_ip: str

@@ -3,6 +3,23 @@
 # IP Manager Offline Package Builder
 # Creates a complete offline deployment package with all dependencies
 #
+# USAGE:
+#   ./build-offline-package.sh [source-directory]
+#
+# EXAMPLES:
+#   ./build-offline-package.sh                    # Uses /home/ubuntu/ipmanager
+#   ./build-offline-package.sh /path/to/ipmanager # Uses custom path
+#   ./build-offline-package.sh ~/ipmanager        # Uses home directory
+#
+# REQUIREMENTS:
+#   - Run on a machine WITH internet access
+#   - Docker and Docker Compose installed
+#   - ipmanager source code available
+#   - ~20GB free disk space in /tmp
+#
+# OUTPUT:
+#   /tmp/ipmanager-offline-package-YYYYMMDD.tar.gz
+#
 # Run this on a machine WITH internet access
 # Then transfer the resulting package to the offline machine
 #
@@ -19,6 +36,14 @@ PACKAGE_NAME="ipmanager-offline-package"
 PACKAGE_VERSION="2.0-$(date +%Y%m%d)"
 BUILD_DIR="/tmp/${PACKAGE_NAME}"
 FINAL_PACKAGE="${PACKAGE_NAME}-${PACKAGE_VERSION}.tar.gz"
+
+# Source directory - use parameter or default
+SOURCE_DIR="${1:-/home/ubuntu/ipmanager}"
+
+echo "Source directory: $SOURCE_DIR"
+echo "Build directory: $BUILD_DIR"
+echo "Package name: $FINAL_PACKAGE"
+echo ""
 
 # Clean up any previous builds
 if [ -d "$BUILD_DIR" ]; then
@@ -66,13 +91,21 @@ echo "=========================================="
 # and include the source code
 
 echo "Copying application source code..."
-if [ ! -d "/home/ubuntu/ipmanager" ]; then
-    echo "ERROR: /home/ubuntu/ipmanager not found!"
-    echo "Please run this script on the machine with ipmanager source code"
+if [ ! -d "$SOURCE_DIR" ]; then
+    echo "ERROR: $SOURCE_DIR not found!"
+    echo ""
+    echo "Usage: $0 [source-directory]"
+    echo ""
+    echo "Examples:"
+    echo "  $0                              # Uses /home/ubuntu/ipmanager"
+    echo "  $0 /path/to/ipmanager          # Uses custom path"
+    echo "  $0 ./ipmanager                 # Uses current directory"
+    echo ""
     exit 1
 fi
 
-cp -r /home/ubuntu/ipmanager/* source/
+echo "Copying from: $SOURCE_DIR"
+cp -r "$SOURCE_DIR"/* source/
 
 echo "Building backend Docker image..."
 cd source/backend
@@ -642,17 +675,40 @@ tar -czf "$FINAL_PACKAGE" "$PACKAGE_NAME/"
 FINAL_SIZE=$(du -h "$FINAL_PACKAGE" | cut -f1)
 
 echo ""
+echo "Generating checksum for verification..."
+sha256sum "$FINAL_PACKAGE" > "${FINAL_PACKAGE}.sha256"
+CHECKSUM=$(cat "${FINAL_PACKAGE}.sha256")
+
+echo ""
+echo "Testing archive integrity..."
+if tar -tzf "$FINAL_PACKAGE" > /dev/null 2>&1; then
+    echo "✓ Archive integrity verified - package is good!"
+else
+    echo "✗ WARNING: Archive may be corrupted!"
+    echo "  Please rebuild the package"
+    exit 1
+fi
+
+echo ""
 echo "=========================================="
 echo "Package Build Complete!"
 echo "=========================================="
 echo ""
 echo "Package: /tmp/$FINAL_PACKAGE"
 echo "Size: $FINAL_SIZE"
+echo "Checksum: ${FINAL_PACKAGE}.sha256"
+echo ""
+echo "CHECKSUM (SHA256):"
+echo "$CHECKSUM"
+echo ""
+echo "IMPORTANT: Save this checksum! Verify it on the target machine:"
+echo "  sha256sum -c ${FINAL_PACKAGE}.sha256"
 echo ""
 echo "To use this package:"
-echo "1. Transfer /tmp/$FINAL_PACKAGE to your offline machine"
-echo "2. Extract: tar -xzf $FINAL_PACKAGE"
-echo "3. Run: cd $PACKAGE_NAME && ./scripts/install-offline.sh"
+echo "1. Transfer /tmp/$FINAL_PACKAGE AND ${FINAL_PACKAGE}.sha256 to your offline machine"
+echo "2. Verify checksum: sha256sum -c ${FINAL_PACKAGE}.sha256"
+echo "3. Extract: tar -xzf $FINAL_PACKAGE"
+echo "4. Run: cd $PACKAGE_NAME && ./scripts/install-offline.sh"
 echo ""
 echo "Package contents:"
 cat "$BUILD_DIR/MANIFEST.txt"

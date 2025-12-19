@@ -919,7 +919,14 @@ const handleResetStatus = async () => {
                     🔒 Reserve IP
                   </button>
                 )}
-                {selectedIP.status === 'down' && proxmoxConnected && (
+
+                {/* DEBUG: Check why button isn't showing */}
+                {selectedIP.status !== 'up' && !proxmoxConnected && (
+                  <div style={{color: 'red', padding: '10px', background: '#fee'}}>
+                    ⚠️ Proxmox not connected. Status: {selectedIP.status}
+                  </div>
+                )}
+                {selectedIP.status !== 'up' && proxmoxConnected && (
                   <button 
                     className="action-btn btn-proxmox"
                     onClick={() => handleCreateVMClick(selectedIP)}

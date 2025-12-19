@@ -1,0 +1,49 @@
+
+# Then on the VM, expand the partition
+ssh into the VM and run:
+sudo apt update
+sudo growpart /dev/sda 1
+sudo resize2fs /dev/sda1
+
+#=====================================================================
+
+# Install required packages
+sudo apt update
+sudo apt install -y iperf3 prometheus-node-exporter
+
+#=====================================================================
+# Start and enable services
+sudo systemctl start iperf3
+sudo systemctl enable iperf3
+sudo systemctl start prometheus-node-exporter
+sudo systemctl enable prometheus-node-exporter
+
+#=====================================================================
+# Configure iperf3 to run as a server
+sudo systemctl edit --full iperf3.service
+
+#=====================================================================
+# Create the service file
+sudo nano /etc/systemd/system/iperf3.service
+
+Add this content:
+#---------------------------------------------------------------------
+[Unit]
+Description=iPerf3 Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/iperf3 -s
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+
+#=====================================================================
+sudo systemctl daemon-reload
+sudo systemctl enable iperf3
+sudo systemctl start iperf3
+sudo systemctl status iperf3

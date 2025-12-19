@@ -1,6 +1,9 @@
 - targets:
-    - '192.168.0.32:9100'
-    - '192.168.0.33:9100'
+  - 192.168.0.32:9100
+  - 192.168.0.33:9100
+  - 192.168.0.34:9100
+  - 192.168.0.35:9100
+  - 192.168.0.36:9100
   labels:
-    job: 'node_exporter'
-    environment: 'production'
+    job: node_exporter
+    environment: production

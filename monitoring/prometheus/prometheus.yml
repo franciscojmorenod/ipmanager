@@ -22,3 +22,11 @@ scrape_configs:
     file_sd_configs:
       - files:
           - '/etc/prometheus/targets/iperf.yml'
+
+  # ADD THIS NEW JOB
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['172.19.0.4:8080']
+        labels:
+          environment: 'production'
+          service: 'container-monitoring'          
