@@ -69,7 +69,7 @@ IP Manager is a comprehensive network infrastructure monitoring and management s
 └──────┬────────────┬─────────────┬──────────────┬────────────────┘
        │            │             │              │
        │            │             │              │
-   ┌───▼───┐   ┌───▼────┐   ┌───▼─────┐   ┌───▼────────┐
+   ┌───▼───┐   ┌───▼────┐   ┌───▼───────┐   ┌───▼────────┐
    │ MySQL │   │Proxmox │   │ Prometheus│   │   VMs      │
    │  DB   │   │   VE   │   │  +Grafana │   │(iperf3 +   │
    │       │   │        │   │           │   │node_export)│
@@ -79,25 +79,25 @@ IP Manager is a comprehensive network infrastructure monitoring and management s
 ### Container Architecture
 
 ```
-┌─────────────────── Docker Compose Stack ────────────────────┐
-│                                                              │
+┌─────────────────── Docker Compose Stack ──────────────────┐
+│                                                           │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │ ipam-frontend│  │ ipam-backend │  │  ipam-mysql  │     │
 │  │  (React)     │  │  (FastAPI)   │  │   (MySQL)    │     │
 │  └──────────────┘  └──────────────┘  └──────────────┘     │
-│                                                              │
+│                                                           │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │ prometheus   │  │   grafana    │  │  cadvisor    │     │
 │  │ (Metrics DB) │  │ (Dashboard)  │  │(Container    │     │
 │  │              │  │              │  │ Monitoring)  │     │
 │  └──────────────┘  └──────────────┘  └──────────────┘     │
-│                                                              │
-│  ┌──────────────┐  ┌──────────────┐                        │
-│  │alertmanager  │  │ phpmyadmin   │                        │
-│  │ (Alerts)     │  │  (DB Admin)  │                        │
-│  └──────────────┘  └──────────────┘                        │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+│                                                           │
+│  ┌──────────────┐  ┌──────────────┐                       │
+│  │alertmanager  │  │ phpmyadmin   │                       │
+│  │ (Alerts)     │  │  (DB Admin)  │                       │
+│  └──────────────┘  └──────────────┘                       │
+│                                                           │
+└───────────────────────────────────────────────────────────┘
 ```
 
 ### Network Flow
